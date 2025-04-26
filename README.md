@@ -68,8 +68,8 @@ python solar_charge_controller.py \
 | `--email` | ✅ | ChargePoint account email address |
 | `--password` | ✅ | ChargePoint account password |
 | `--prometheus-url` | ✅ | Base URL of your Prometheus server (e.g., `http://localhost:9090`) |
-| `--control-interval` | ❌ (default: 5) | Time in minutes between checking solar production and adjusting charging. This should not be too frequent because if the car is charging, it must stop it to change the amperage and restart it. |
-| `--log-file` | ❌ (default: `solar_charge_controller.log`) | File to write logs to |
+| `--control-interval` | ❌ | (default: 5) Time in minutes between checking solar production and adjusting charging. This should not be too frequent because if the car is charging, it must stop it to change the amperage and restart it. |
+| `--log-file` | ❌ | (default: `solar_charge_controller.log`) File to write logs to |
 | `--quiet` | ❌ | Suppress console output, log only to file |
 
 ## License

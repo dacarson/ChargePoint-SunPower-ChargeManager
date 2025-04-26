@@ -44,6 +44,7 @@ Install required libraries:
 
 ```bash
 pip install python-chargepoint requests
+```
 
 ## Configuration
 

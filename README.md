@@ -60,7 +60,7 @@ python solar_charge_controller.py \
   --control-interval 300 \
   --log-file "solar_charge_controller.log" \
   --quiet
-
+```
 ### Arguments
 
 | Argument | Required? | Description |

@@ -10,7 +10,7 @@ Charging amperage is updated every few minutes based on the most recent smoothed
 
 ## Features
 
-- **Prometheus-powered:** Pulls 5-minute average solar production and consumption for stable decision making.
+- **Prometheus-powered:** Pulls 5 mins (default - user controlled) average solar production and consumption for stable decision making.
 - **ChargePoint Home Flex control:** Dynamically sets charger amperage up or down based on available solar energy.
 - **Fast Night Charging:** Automatically switches to full-speed charging overnight when solar drops off.
 - **Smart Amperage Selection:** Rounds up to the nearest allowed amperage setting to maximize charging speed.
@@ -23,7 +23,7 @@ Charging amperage is updated every few minutes based on the most recent smoothed
 ##  Architecture
 
 1. Prometheus scrapes solar production and consumption metrics from SunPower PVS6.
-2. This controller queries Prometheus for 5-minute average data.
+2. This controller queries Prometheus for the user defined control-interval average data.
 3. Calculates available excess solar based on **grid export** (negative consumption).
 4. Dynamically adjusts ChargePoint Home Flex charging amperage accordingly.
 5. Falls back to maximum amperage for fast overnight charging.
@@ -67,7 +67,7 @@ python solar_charge_controller.py \
 | `--email` | ✅ | ChargePoint account email address |
 | `--password` | ✅ | ChargePoint account password |
 | `--prometheus-url` | ✅ | Base URL of your Prometheus server (e.g., `http://localhost:9090`) |
-| `--control-interval` | ❌ (default: 300) | Time in seconds between checking solar production and adjusting charging |
+| `--control-interval` | ❌ (default: 5) | Time in minutes between checking solar production and adjusting charging |
 | `--log-file` | ❌ (default: `solar_charge_controller.log`) | File to write logs to |
 | `--quiet` | ❌ | Suppress console output, log only to file |
 

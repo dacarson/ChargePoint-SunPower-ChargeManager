@@ -27,7 +27,7 @@ Charging amperage is updated every few minutes based on the most recent smoothed
 2. This controller queries Prometheus for the user defined control-interval average data.
 3. Calculates available excess solar based on **grid export** (negative consumption).
 4. Dynamically adjusts ChargePoint Home Flex charging amperage accordingly.
-5. Falls back to maximum amperage for fast overnight charging.
+5. Falls back to maximum amperage for fast overnight charging. Overnight is defined as when solar production is less than 500W.
 
 ---
 

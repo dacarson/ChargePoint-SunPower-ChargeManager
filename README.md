@@ -63,7 +63,7 @@ python solar_charge_controller.py \
 ```
 ### Arguments
 
-| Argument | Required? | Description |
+| Argument&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Required? | Description |
 |:---|:---|:---|
 | `--email` | ✅ | ChargePoint account email address |
 | `--password` | ✅ | ChargePoint account password |

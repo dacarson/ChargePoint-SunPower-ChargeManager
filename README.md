@@ -1,3 +1,4 @@
+![Github License](https://img.shields.io/github/license/dacarson/ChargePoint-SunPower-ChargeManager) ![Github Release](https://img.shields.io/github/v/release/dacarson/ChargePoint-SunPower-ChargeManager?display_name=tag)
 # Solar Smart Charge Controller for ChargePoint Home Flex
 
 This project provides an intelligent solar-aware charge controller for the ChargePoint Home Flex EV charger.  

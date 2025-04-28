@@ -197,6 +197,11 @@ def main():
                         client.start_charging_session(device_id)
                 else:
                     logging.info(f"Amperage already set correctly ({current_amperage}A). No change needed.")
+                    
+                # --- Start the charger now if we are not already charging and we plugged in (aka AVAILABLE)
+                if charging_status == "AVAILABLE":
+                    logging.info("Starting charging session...")
+                    session = client.start_charging_session(charger_id)
 
             time.sleep(control_interval * 60)
 

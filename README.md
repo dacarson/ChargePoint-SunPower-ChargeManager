@@ -1,3 +1,4 @@
+![Github License](https://img.shields.io/github/license/dacarson/ChargePoint-SunPower-ChargeManager) ![Github Release](https://img.shields.io/github/v/release/dacarson/ChargePoint-SunPower-ChargeManager?display_name=tag)
 # Solar Smart Charge Controller for ChargePoint Home Flex
 
 This project provides an intelligent solar-aware charge controller for the ChargePoint Home Flex EV charger.  
@@ -10,7 +11,7 @@ Charging amperage is updated every few minutes based on the most recent smoothed
 
 ## Features
 
-- **Prometheus-powered:** Pulls 5-minute average solar production and consumption for stable decision making.
+- **Prometheus-powered:** Pulls 5 mins (default - user controlled) average solar production and consumption for stable decision making.
 - **ChargePoint Home Flex control:** Dynamically sets charger amperage up or down based on available solar energy.
 - **Fast Night Charging:** Automatically switches to full-speed charging overnight when solar drops off.
 - **Smart Amperage Selection:** Rounds up to the nearest allowed amperage setting to maximize charging speed.
@@ -23,10 +24,10 @@ Charging amperage is updated every few minutes based on the most recent smoothed
 ##  Architecture
 
 1. Prometheus scrapes solar production and consumption metrics from SunPower PVS6.
-2. This controller queries Prometheus for 5-minute average data.
+2. This controller queries Prometheus for the user defined control-interval average data.
 3. Calculates available excess solar based on **grid export** (negative consumption).
 4. Dynamically adjusts ChargePoint Home Flex charging amperage accordingly.
-5. Falls back to maximum amperage for fast overnight charging.
+5. Falls back to maximum amperage for fast overnight charging. Overnight is defined as when solar production is less than 500W.
 
 ---
 
@@ -44,6 +45,7 @@ Install required libraries:
 
 ```bash
 pip install python-chargepoint requests
+```
 
 ## Configuration
 
@@ -56,19 +58,19 @@ python solar_charge_controller.py \
   --email "your@email.com" \
   --password "yourpassword" \
   --prometheus-url "http://localhost:9090" \
-  --control-interval 300 \
+  --control-interval 5 \
   --log-file "solar_charge_controller.log" \
   --quiet
-
+```
 ### Arguments
 
-| Argument | Required? | Description |
+| Argument&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Required? | Description |
 |:---|:---|:---|
 | `--email` | ✅ | ChargePoint account email address |
 | `--password` | ✅ | ChargePoint account password |
 | `--prometheus-url` | ✅ | Base URL of your Prometheus server (e.g., `http://localhost:9090`) |
-| `--control-interval` | ❌ (default: 300) | Time in seconds between checking solar production and adjusting charging |
-| `--log-file` | ❌ (default: `solar_charge_controller.log`) | File to write logs to |
+| `--control-interval` | ❌ | (default: 5) Time in minutes between checking solar production and adjusting charging. This should not be too frequent because if the car is charging, it must stop it to change the amperage and restart it. |
+| `--log-file` | ❌ | (default: `solar_charge_controller.log`) File to write logs to |
 | `--quiet` | ❌ | Suppress console output, log only to file |
 
 ## License

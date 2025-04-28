@@ -5,13 +5,13 @@ After=network.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/solar-charge-controller
-ExecStart=/home/pi/solar-charge-controller/venv/bin/python solar_charge_controller.py \
+WorkingDirectory=/home/pi/ChargePoint-SunPower-ChargeManager
+ExecStart=/home/pi/ChargePoint-SunPower-ChargeManager/venv/bin/python solar_charge_controller.py \
     --email your@email.com \
     --password yourpassword \
     --prometheus-url http://localhost:9090 \
     --control-interval 5 \
-    --log-file /home/pi/solar-charge-controller/solar_charge_controller.log \
+    --log-file /home/pi/ChargePoint-SunPower-ChargeManager/solar_charge_controller.log \
     --quiet
 Restart=always
 RestartSec=10

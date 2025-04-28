@@ -3,6 +3,7 @@ import time
 import logging
 import argparse
 import requests
+import math
 from python_chargepoint import ChargePoint
 
 # --- FUNCTIONS ---
@@ -35,7 +36,7 @@ def query_prometheus(prometheus_url, promql_query):
         response = requests.get(
             f"{prometheus_url}/api/v1/query",
             params={"query": promql_query},
-            timeout=10
+            timeout=30
         )
         response.raise_for_status()
         result = response.json()
@@ -80,6 +81,21 @@ def determine_target_amperage(avg_excess_solar_watts, allowed_amps, voltage=240)
         return max(allowed_amps)
     return min(possible_amps)
 
+def get_current_charging_watts(client):
+    """Fetch current car charging load if charging."""
+    try:
+        charging_status = client.get_user_charging_status()
+        if charging_status and charging_status.charging_status == "CHARGING":
+            session = client.get_charging_session(charging_status.session_id)
+            current_amps = session.amperage
+            charging_watts = current_amps * 240
+            return charging_watts
+        else:
+            return 0
+    except Exception as e:
+        logging.error(f"Failed to fetch current charging watts: {e}")
+        return 0
+
 # --- MAIN ---
 
 def main():
@@ -103,6 +119,13 @@ def main():
     charger_id = chargers[0]
     logging.info(f"Found charger {charger_id}")
 
+    charger_status = client.get_home_charger_status(charger_id)
+    allowed_amps = charger_status.possible_amperage_limits
+    min_amperage = min(allowed_amps)
+    minimum_watts_required = min_amperage * 240
+
+    logging.info(f"Minimum amperage is {min_amperage}A, requiring at least {minimum_watts_required}W of solar excess to start charging.")
+
     while True:
         try:
             solar = get_solar_power_status(prometheus_url, control_interval)
@@ -113,9 +136,12 @@ def main():
 
             production = solar["production_watts"]
             consumption = solar["consumption_watts"]
-            excess = solar["excess_solar_watts"]
+            grid_excess = solar["excess_solar_watts"]
 
-            logging.info(f"{control_interval}-min averages -  Production: {production:.1f}W, Consumption: {consumption:.1f}W, Net excess: {excess:.1f}W")
+            current_charging_watts = get_current_charging_watts(client)
+            excess = grid_excess + current_charging_watts
+
+            logging.info(f"{control_interval}-min averages - Production: {production:.1f}W, Grid Excess: {grid_excess:.1f}W, Current Charging Load: {current_charging_watts:.1f}W, True excess: {excess:.1f}W")
 
             charger_status = client.get_home_charger_status(charger_id)
             allowed_amps = charger_status.possible_amperage_limits
@@ -125,12 +151,12 @@ def main():
             if production < 500:
                 target_amps = max(allowed_amps)
                 logging.info(f"Low production ({production:.1f}W). Setting to max amperage {target_amps}A for fast charging.")
-            elif excess > 0:
+            elif excess >= minimum_watts_required:
                 target_amps = determine_target_amperage(excess, allowed_amps)
                 logging.info(f"Excess solar ({excess:.1f}W). Setting amperage to {target_amps}A.")
             else:
                 target_amps = 0
-                logging.info(f"No excess solar. Stopping charging.")
+                logging.info(f"Not enough excess solar ({excess:.1f}W) < minimum ({minimum_watts_required:.1f}W). Stopping charging.")
 
             # --- Apply the charging decision ---
 
@@ -180,4 +206,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

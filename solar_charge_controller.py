@@ -179,7 +179,7 @@ def main():
 
             charger_status = client.get_home_charger_status(charger_id)
             current_charging_watts = get_current_charging_watts(client, charger_status)
-            average_excess = ( -1 * consumption) + current_charging_watts
+            average_excess = -1 * (consumption - current_charging_watts)
             predicted_excess = average_excess + (solar_slope * control_interval * 60)
 
             logging.info(f"{control_interval}-min averages - Production: {production:.1f}W, Grid Consumption: {consumption:.1f}W, Current Charging Load: {current_charging_watts:.1f}W, Average Excess: {average_excess:.1f}W, Solar Slope: {solar_slope:.3f}W/s, Predicted Excess: {predicted_excess:.1f}W")

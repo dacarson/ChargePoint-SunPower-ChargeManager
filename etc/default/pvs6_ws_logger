@@ -1,0 +1,8 @@
+#-----------------------------------------------------------------------------
+# /etc/default/pvs6_ws_logger - config options for the PVS6 WebSocket Logger
+#-----------------------------------------------------------------------------
+
+# this example publishes to influxdb on localhost:8086 to a db named 'pvs6'
+# Make sure the database has been created in Influx
+
+CMDARGS="--influxdb --influxdb_user $INFLUX_USER --influxdb_pass $INFLUX_PASS"

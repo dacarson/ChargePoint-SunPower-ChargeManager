@@ -1,0 +1,16 @@
+[Unit]
+Description=PVS6  WebSocket Listener
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/
+EnvironmentFile=/etc/default/pvs6_ws_logger
+ExecStart=python3 /home/pi/pvs6_ws_logger.py $CMDARGS
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+User=pi
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,8 @@
+#-----------------------------------------------------------------------------
+# /etc/default/solar_charge_controller - config options for the ChargePoint controller
+#-----------------------------------------------------------------------------
+
+# this example publishes to influxdb on localhost:8086 to a db named 'pvs6'
+# Make sure the database has been created in Influx
+
+CMDARGS="--influxdb-user $INFLUX_USER --influxdb-pass $INFLUX_PASS --email $CHARGEPOINT_EMAIL --password $CHARGEPOINT_PASS --log-file /home/pi/ChargePoint-SunPower-ChargeManager/solar_charge_controller.log  --quiet

@@ -1,0 +1,16 @@
+[Unit]
+Description=Solar Smart Charge Controller for ChargePoint
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/ChargePoint-SunPower-ChargeManager
+EnvironmentFile=/etc/default/solar_charge_controller
+ExecStart=/home/pi/ChargePoint-SunPower-ChargeManager/venv/bin/python solar_charge_controller.py $CMDARGS
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

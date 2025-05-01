@@ -25,6 +25,7 @@ def parse_args():
 
     # Control loop options
     parser.add_argument("--control-interval", type=int, default=5, help="Control interval in minutes (default: 5)")
+    parser.add_argument("--slope-window", type=int, default=30, help="Time window in minutes for slope calculation (default: 30)")
     parser.add_argument("--log-file", default="solar_charge_controller.log", help="Log file path")
     parser.add_argument("--quiet", action="store_true", help="Suppress console logging")
 
@@ -58,20 +59,24 @@ def log_control_metrics_to_influx(influx_client, solar_slope, predicted_excess, 
     except Exception as e:
         logging.warning(f"Failed to write control metrics to InfluxDB: {e}")
 
-def get_solar_power_status(influx_client, control_interval_minutes):
+def get_solar_power_status(influx_client, control_interval_minutes, slope_window_minutes):
     try:
         now = int(time.time())
-        start_time = now - (control_interval_minutes * 60)
-        time_clause = f"time >= {start_time}s and time <= {now}s"
+        control_start_time = now - (control_interval_minutes * 60)
+        slope_start_time = now - (slope_window_minutes * 60)
+        
+        # Time clauses for different queries
+        control_time_clause = f"time >= {control_start_time}s and time <= {now}s"
+        slope_time_clause = f"time >= {slope_start_time}s and time <= {now}s"
 
-        # Average pv_p (production) over the window
-        production_query = f'SELECT MEAN("pv_p") FROM "sunpower_power" WHERE {time_clause}'
-        # Average net_p (grid import/export) over the window
-        net_query = f'SELECT MEAN("net_p") FROM "sunpower_power" WHERE {time_clause}'
-        # Estimate slope via linear regression of pv_p
+        # Average pv_p (production) over the control window
+        production_query = f'SELECT MEAN("pv_p") FROM "sunpower_power" WHERE {control_time_clause}'
+        # Average net_p (grid import/export) over the control window
+        net_query = f'SELECT MEAN("net_p") FROM "sunpower_power" WHERE {control_time_clause}'
+        # Estimate slope via linear regression of pv_p over the longer slope window
         slope_query = (
             f'SELECT DERIVATIVE(MEAN("pv_p"), 1s) FROM "sunpower_power" '
-            f'WHERE {time_clause} GROUP BY time(1m) fill(null)'
+            f'WHERE {slope_time_clause} GROUP BY time(1m) fill(null)'
         )
 
         prod_result = influx_client.query(production_query)
@@ -146,6 +151,9 @@ def main():
     email = args.email
     password = args.password
     control_interval = args.control_interval  # minutes
+    slope_window = args.slope_window  # minutes
+
+    logging.info(f"Using {control_interval}-min control interval and {slope_window}-min slope calculation window")
 
     logging.info("Connecting to ChargePoint...")
     client = ChargePoint(email, password)
@@ -167,7 +175,7 @@ def main():
 
     while True:
         try:
-            solar = get_solar_power_status(influx_client, control_interval)
+            solar = get_solar_power_status(influx_client, control_interval, slope_window)
             if not solar:
                 logging.warning("No solar data. Skipping...")
                 time.sleep(control_interval * 60)

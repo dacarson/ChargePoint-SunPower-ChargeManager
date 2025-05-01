@@ -19,6 +19,7 @@ Charging amperage is updated every few minutes based on the most recent smoothed
 - **Fast Night Charging:** Automatically switches to full-speed charging overnight when solar drops off.
 - **Smart Amperage Selection:** Rounds up to the nearest allowed amperage setting to maximize charging speed.
 - **Minimal Stress on Devices:** No direct high-frequency polling of the SunPower PVS6.
+- **Stable Solar Predictions:** Uses a longer time window (30 mins default) for slope calculations to smooth out short-term fluctuations.
 - **Simple Logging:** Logs to file, with optional quiet mode (no console output).
 - **CLI Configurable:** Easy control via command-line parameters.
 
@@ -28,7 +29,9 @@ Charging amperage is updated every few minutes based on the most recent smoothed
 
 1. The PVS6 WebSocket Logger (`pvs6_ws_logger.py`) continuously connects to the SunPower PVS6's WebSocket interface and streams real-time power data.
 2. This data is stored in InfluxDB for historical analysis.
-3. The Solar Charge Controller (`solar_charge_controller.py`) queries InfluxDB for the user defined control-interval average data.
+3. The Solar Charge Controller (`solar_charge_controller.py`) queries InfluxDB for:
+   - Recent average power data (over the control interval)
+   - Solar power trend (slope) over a longer window to predict future production
 4. The controller calculates available excess solar based on **grid export** (negative consumption).
 5. The controller dynamically adjusts ChargePoint Home Flex charging amperage accordingly.
 6. The system falls back to maximum amperage for fast overnight charging. Overnight is defined as when solar production is less than 500W.
@@ -100,6 +103,7 @@ python solar_charge_controller.py \
   --influxdb-pass "your_influx_password" \
   --influxdb-db "pvs6" \
   --control-interval 5 \
+  --slope-window 30 \
   --log-file "solar_charge_controller.log" \
   --quiet
 ```
@@ -116,6 +120,7 @@ python solar_charge_controller.py \
 | `--influxdb-pass` | ✅ | InfluxDB password |
 | `--influxdb-db` | ❌ | (default: pvs6) InfluxDB database name |
 | `--control-interval` | ❌ | (default: 5) Time in minutes between checking solar production and adjusting charging. This should not be too frequent because if the car is charging, it must stop it to change the amperage and restart it. |
+| `--slope-window` | ❌ | (default: 30) Time window in minutes for calculating solar power trends. A longer window provides more stable predictions by smoothing out short-term fluctuations. |
 | `--log-file` | ❌ | (default: `solar_charge_controller.log`) File to write logs to |
 | `--quiet` | ❌ | Suppress console output, log only to file |
 

@@ -237,8 +237,6 @@ def main():
                     client.set_amperage_limit(charger_id, target_amps)
                     logging.info(f"Amperage set command sent for {target_amps}A.")
 
-                    time.sleep(5)
-
                     updated_status = client.get_home_charger_status(charger_id)
                     confirmed_amperage = updated_status.amperage_limit
 

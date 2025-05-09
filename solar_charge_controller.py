@@ -224,6 +224,9 @@ def main():
                     session.stop()
                 else:
                     logging.info("Already not charging.")
+                    if current_amperage != min_amperage:
+                        client.set_amperage_limit(charger_id, min_amperage)
+                        logging.info(f"Amperage set command set for minimum for {min_amperage}A.")
             else:
                 if current_amperage != target_amps:
                     logging.info(f"Changing amperage from {current_amperage}A to {target_amps}A...")

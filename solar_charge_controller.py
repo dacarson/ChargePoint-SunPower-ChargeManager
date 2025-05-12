@@ -111,7 +111,8 @@ def determine_target_amperage(avg_excess_solar_watts, allowed_amps, voltage=240)
     if avg_excess_solar_watts <= 0:
         return 0
 
-    ideal_amps = avg_excess_solar_watts / voltage
+    # Adjust ideal_amps logic to handle float rounding just below min allowed
+    ideal_amps = max(avg_excess_solar_watts / voltage, min(allowed_amps) - 0.5)
 
     # Round UP to nearest allowed amps
     possible_amps = [amp for amp in allowed_amps if amp >= ideal_amps]
@@ -169,7 +170,7 @@ def main():
     charger_status = client.get_home_charger_status(charger_id)
     allowed_amps = charger_status.possible_amperage_limits
     min_amperage = min(allowed_amps)
-    minimum_watts_required = min_amperage * 240
+    minimum_watts_required = (min_amperage - 0.5) * 240
 
     logging.info(f"Minimum amperage is {min_amperage}A, requiring at least {minimum_watts_required}W of solar excess to start charging.")
 

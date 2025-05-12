@@ -10,6 +10,8 @@ ExecReload=/bin/kill -HUP $MAINPID
 KillMode=process
 Restart=on-failure
 User=pi
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

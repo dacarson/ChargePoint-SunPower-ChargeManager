@@ -44,7 +44,7 @@ def setup_logging(log_file, quiet):
         console.setFormatter(formatter)
         logging.getLogger().addHandler(console)
 
-def log_control_metrics_to_influx(influx_client, solar_slope, predicted_excess, current_charging_watts, target_amps):
+def log_control_metrics_to_influx(influx_client, solar_slope, predicted_excess, current_charging_watts, target_amps, current_amperage):
     json_body = [{
         "measurement": "solar_charge_control",
         "fields": {
@@ -52,6 +52,7 @@ def log_control_metrics_to_influx(influx_client, solar_slope, predicted_excess, 
             "excess_solar_watts": float(predicted_excess),
             "charging_power_watts": float(current_charging_watts),
             "target_amperage": int(target_amps),
+            "current_amperage": int(current_amperage),
         }
     }]
     try:
@@ -120,8 +121,9 @@ def determine_target_amperage(avg_excess_solar_watts, allowed_amps, voltage=240)
         return max(allowed_amps)
     return min(possible_amps)
 
-def get_current_charging_watts(client, charger_status):
+def get_current_charging_watts(client, charger_id):
     """Fetch current car charging load if charging."""
+    charger_status = client.get_home_charger_status(charger_id)
     try:
         if charger_status and charger_status.charging_status == "CHARGING":
             charging_status = client.get_user_charging_status()
@@ -133,6 +135,51 @@ def get_current_charging_watts(client, charger_status):
     except Exception as e:
         logging.error(f"Failed to fetch current charging watts: {e}")
         return 0
+
+def apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage):
+    current_amperage = charger_status.amperage_limit
+    charging_status = charger_status.charging_status
+
+    if target_amps == 0:
+        if charging_status == "CHARGING":
+            logging.info("Stopping charging...")
+            session = client.get_charging_session(client.get_user_charging_status().session_id)
+            session.stop()
+        else:
+            logging.info("Already not charging.")
+            if current_amperage != min_amperage:
+                client.set_amperage_limit(charger_id, min_amperage)
+                logging.info(f"Amperage set command set for minimum for {min_amperage}A.")
+    else:
+        if current_amperage != target_amps:
+            logging.info(f"Changing amperage from {current_amperage}A to {target_amps}A...")
+
+            was_charging = (charging_status == "CHARGING")
+            if was_charging:
+                session = client.get_charging_session(client.get_user_charging_status().session_id)
+                device_id = session.device_id
+                session.stop()
+
+            client.set_amperage_limit(charger_id, target_amps)
+            logging.info(f"Amperage set command sent for {target_amps}A.")
+
+            updated_status = client.get_home_charger_status(charger_id)
+            confirmed_amperage = updated_status.amperage_limit
+
+            if confirmed_amperage == target_amps:
+                logging.info(f"Confirmed amperage: {confirmed_amperage}A.")
+            else:
+                logging.warning(f"Amperage mismatch! Set {target_amps}A but charger reports {confirmed_amperage}A.")
+
+            if was_charging:
+                logging.info("Restarting charging session...")
+                client.start_charging_session(device_id)
+        else:
+            logging.info(f"Amperage already set correctly ({current_amperage}A). No change needed.")
+
+        if charging_status == "AVAILABLE" and charger_status.plugged_in:
+            logging.info("Starting charging session...")
+            client.start_charging_session(charger_id)
 
 # --- MAIN ---
 
@@ -174,6 +221,8 @@ def main():
 
     logging.info(f"Minimum amperage is {min_amperage}A, requiring at least {minimum_watts_required}W of solar excess to start charging.")
 
+    last_control_change = 0
+
     while True:
         try:
             solar = get_solar_power_status(influx_client, control_interval, slope_window)
@@ -187,7 +236,7 @@ def main():
             solar_slope = solar["solar_slope_watts_per_second"]
 
             charger_status = client.get_home_charger_status(charger_id)
-            current_charging_watts = get_current_charging_watts(client, charger_status)
+            current_charging_watts = get_current_charging_watts(client, charger_id)
             average_excess = -1 * (consumption - current_charging_watts)
             predicted_excess = average_excess + (solar_slope * control_interval * 60)
 
@@ -206,61 +255,23 @@ def main():
             else:
                 target_amps = 0
                 logging.info(f"Insufficient predicted excess solar ({predicted_excess:.1f}W) < minimum ({minimum_watts_required:.1f}W). Stopping charging.")
+                
+            if ((time.time() - last_control_change) >  (control_interval * 60)):
+              apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage)
+              current_amperage = charger_status.amperage_limit
+              last_control_change = time.time()
 
-
-            # --- Log the charging decision ---
+            # Update and log the current_charging_watts
             log_control_metrics_to_influx(
                 influx_client,
                 solar_slope,
                 predicted_excess,
                 current_charging_watts,
-                target_amps
+                target_amps,
+                current_amperage
             )
-
-            # --- Apply the charging decision ---
-            if target_amps == 0:
-                if charging_status == "CHARGING":
-                    logging.info("Stopping charging...")
-                    session = client.get_charging_session(client.get_user_charging_status().session_id)
-                    session.stop()
-                else:
-                    logging.info("Already not charging.")
-                    if current_amperage != min_amperage:
-                        client.set_amperage_limit(charger_id, min_amperage)
-                        logging.info(f"Amperage set command set for minimum for {min_amperage}A.")
-            else:
-                if current_amperage != target_amps:
-                    logging.info(f"Changing amperage from {current_amperage}A to {target_amps}A...")
-
-                    was_charging = (charging_status == "CHARGING")
-                    if was_charging:
-                        session = client.get_charging_session(client.get_user_charging_status().session_id)
-                        device_id = session.device_id
-                        session.stop()
-
-                    client.set_amperage_limit(charger_id, target_amps)
-                    logging.info(f"Amperage set command sent for {target_amps}A.")
-
-                    updated_status = client.get_home_charger_status(charger_id)
-                    confirmed_amperage = updated_status.amperage_limit
-
-                    if confirmed_amperage == target_amps:
-                        logging.info(f"Confirmed amperage: {confirmed_amperage}A.")
-                    else:
-                        logging.warning(f"Amperage mismatch! Set {target_amps}A but charger reports {confirmed_amperage}A.")
-
-                    if was_charging:
-                        logging.info("Restarting charging session...")
-                        client.start_charging_session(device_id)
-                else:
-                    logging.info(f"Amperage already set correctly ({current_amperage}A). No change needed.")
-                    
-                # --- Start the charger now if we are not already charging and we plugged in (aka AVAILABLE)
-                if charging_status == "AVAILABLE" and charger_status.plugged_in:
-                    logging.info("Starting charging session...")
-                    session = client.start_charging_session(charger_id)
-
-            time.sleep(control_interval * 60)
+            
+            time.sleep(60)
 
         except Exception as e:
             logging.error(f"Error in main loop: {e}")

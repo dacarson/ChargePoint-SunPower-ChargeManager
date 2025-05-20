@@ -5,6 +5,7 @@ import argparse
 import requests
 import math
 from python_chargepoint import ChargePoint
+from python_chargepoint.exceptions import ChargePointCommunicationException
 from influxdb import InfluxDBClient
 
 # --- FUNCTIONS ---
@@ -142,7 +143,7 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
 
     if target_amps == 0:
         if charging_status == "CHARGING":
-            logging.info("Stopping charging...")
+            logging.info("Should not be charging.")
             session = client.get_charging_session(client.get_user_charging_status().session_id)
             session.stop()
         else:
@@ -257,9 +258,13 @@ def main():
                 logging.info(f"Insufficient predicted excess solar ({predicted_excess:.1f}W) < minimum ({minimum_watts_required:.1f}W). Stopping charging.")
                 
             if ((time.time() - last_control_change) >  (control_interval * 60)):
-              apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage)
-              current_amperage = charger_status.amperage_limit
-              last_control_change = time.time()
+                try:
+                    apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage)
+                except ChargePointCommunicationException as e:
+                    logging.error(f"Failed to apply charging decision: {e.message}")
+                    # Continue execution - we'll try again on the next control interval
+                current_amperage = charger_status.amperage_limit if target_amps > 0 else 0
+                last_control_change = time.time()
 
             # Update and log the current_charging_watts
             log_control_metrics_to_influx(

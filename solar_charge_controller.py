@@ -244,7 +244,6 @@ def main():
             logging.info(f"{control_interval}-min averages - Production: {production:.1f}W, Grid Consumption: {consumption:.1f}W, Current Charging Load: {current_charging_watts:.1f}W, Average Excess: {average_excess:.1f}W, Solar Slope: {solar_slope:.3f}W/s, Predicted Excess: {predicted_excess:.1f}W")
 
             allowed_amps = charger_status.possible_amperage_limits
-            current_amperage = charger_status.amperage_limit
             charging_status = charger_status.charging_status
 
             if production < 500:
@@ -263,9 +262,10 @@ def main():
                 except ChargePointCommunicationException as e:
                     logging.error(f"Failed to apply charging decision: {e.message}")
                     # Continue execution - we'll try again on the next control interval
-                current_amperage = charger_status.amperage_limit if target_amps > 0 else 0
                 last_control_change = time.time()
 
+            current_amperage = charger_status.amperage_limit if target_amps > 0 else 0
+            
             # Update and log the current_charging_watts
             log_control_metrics_to_influx(
                 influx_client,

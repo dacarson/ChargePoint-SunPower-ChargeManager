@@ -151,6 +151,7 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
             if current_amperage != min_amperage:
                 client.set_amperage_limit(charger_id, min_amperage)
                 logging.info(f"Amperage set command set for minimum for {min_amperage}A.")
+        confirmed_amperage = 0
     else:
         if current_amperage != target_amps:
             logging.info(f"Changing amperage from {current_amperage}A to {target_amps}A...")
@@ -177,10 +178,13 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
                 client.start_charging_session(device_id)
         else:
             logging.info(f"Amperage already set correctly ({current_amperage}A). No change needed.")
+            confirmed_amperage = current_amperage
 
         if charging_status == "AVAILABLE" and charger_status.plugged_in:
             logging.info("Starting charging session...")
             client.start_charging_session(charger_id)
+
+    return confirmed_amperage if target_amps != 0 else 0
 
 # --- MAIN ---
 
@@ -223,6 +227,7 @@ def main():
     logging.info(f"Minimum amperage is {min_amperage}A, requiring at least {minimum_watts_required}W of solar excess to start charging.")
 
     last_control_change = 0
+    last_set_amperage = None
 
     while True:
         try:
@@ -257,14 +262,19 @@ def main():
                 logging.info(f"Insufficient predicted excess solar ({predicted_excess:.1f}W) < minimum ({minimum_watts_required:.1f}W). Stopping charging.")
                 
             if ((time.time() - last_control_change) >  (control_interval * 60)):
-                try:
-                    apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage)
-                except ChargePointCommunicationException as e:
-                    logging.error(f"Failed to apply charging decision: {e.message}")
-                    # Continue execution - we'll try again on the next control interval
-                last_control_change = time.time()
+                current_amperage = charger_status.amperage_limit
+                if charging_status == "CHARGING" and current_amperage == 40 and last_set_amperage != 40:
+                    logging.info("User likely set charger to 40A manually. Skipping adjustment.")
+                else:
+                    try:
+                        new_amperage = apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage)
+                        last_set_amperage = new_amperage
+                    except ChargePointCommunicationException as e:
+                        logging.error(f"Failed to apply charging decision: {e.message}")
+                    last_control_change = time.time()
 
-            current_amperage = charger_status.amperage_limit if target_amps > 0 else 0
+            charger_status = client.get_home_charger_status(charger_id)
+            current_amperage = charger_status.amperage_limit
             
             # Update and log the current_charging_watts
             log_control_metrics_to_influx(

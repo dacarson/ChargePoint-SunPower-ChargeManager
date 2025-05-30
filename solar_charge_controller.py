@@ -269,9 +269,9 @@ def main():
                     try:
                         new_amperage = apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage)
                         last_set_amperage = new_amperage
+                        last_control_change = time.time()
                     except ChargePointCommunicationException as e:
                         logging.error(f"Failed to apply charging decision: {e.message}")
-                    last_control_change = time.time()
 
             charger_status = client.get_home_charger_status(charger_id)
             current_amperage = charger_status.amperage_limit

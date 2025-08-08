@@ -2,11 +2,12 @@ import sys
 import time
 import logging
 import argparse
-import requests
-import math
 from python_chargepoint import ChargePoint
 from python_chargepoint.exceptions import ChargePointCommunicationException
 from influxdb import InfluxDBClient
+
+# --- GLOBAL VARIABLES ---
+current_charging_session = None
 
 # --- FUNCTIONS ---
 
@@ -14,7 +15,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Solar Smart Charge Controller for ChargePoint Home Flex (via InFluxDB).")
 
     # ChargePoint credentials
-    parser.add_argument("--email", required=True, help="ChargePoint account email")
+    parser.add_argument("--username", required=True, help="ChargePoint account username or email")
     parser.add_argument("--password", required=True, help="ChargePoint account password")
 
     # InfluxDB 1.x parameters
@@ -122,45 +123,70 @@ def determine_target_amperage(avg_excess_solar_watts, allowed_amps, voltage=240)
         return max(allowed_amps)
     return min(possible_amps)
 
+def initialize_charging_session_if_active(client, charger_id):
+    """Check if there's an active charging session and initialize the global object."""
+    global current_charging_session
+    
+    try:
+        charging_status = client.get_user_charging_status()
+        if charging_status:
+            current_charging_session = client.get_charging_session(charging_status.session_id)
+            logging.info(f"Found and initialized global charging session: {current_charging_session.session_id}")
+            return True
+        else:
+            logging.info("No active charging session found.")
+            return False
+    except Exception as e:
+        logging.warning(f"Failed to check for existing charging session: {e}")
+        return False
+
+def is_currently_charging():
+    """Check if we're currently charging based on the global session object."""
+    global current_charging_session
+    return current_charging_session is not None
+
 def get_current_charging_watts(client, charger_id):
     """Fetch current car charging load if charging."""
-    charger_status = client.get_home_charger_status(charger_id)
-    try:
-        if charger_status and charger_status.charging_status == "CHARGING":
-            charging_status = client.get_user_charging_status()
-            charging_session = client.get_charging_session(charging_status.session_id)
-            charging_watts = charging_session.power_kw * 1000
+    global current_charging_session
+    
+    # If we have a global charging session, try to use it
+    if current_charging_session:
+        try:
+            current_charging_session.refresh()
+            charging_watts = current_charging_session.power_kw * 1000
+            logging.info(f"Using cached session. Current charging power: {charging_watts}W")
             return charging_watts
-        else:
-            return 0
-    except Exception as e:
-        logging.error(f"Failed to fetch current charging watts: {e}")
-        return 0
+        except Exception as e:
+            logging.warning(f"Failed to refresh cached charging session: {e}. Falling back to charger status check.")
+            current_charging_session = None  # Clear invalid session
+    
+    # Fallback to original method if no global session or it failed
+    return 0
 
 def apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage):
+    global current_charging_session
     current_amperage = charger_status.amperage_limit
-    charging_status = charger_status.charging_status
 
     if target_amps == 0:
-        if charging_status == "CHARGING":
-            logging.info("Should not be charging.")
-            session = client.get_charging_session(client.get_user_charging_status().session_id)
-            session.stop()
+        if is_currently_charging():
+            current_charging_session.stop()
+            current_charging_session = None  # Clear global session when stopping
+            logging.info("Stopped charging and cleared global session.")
         else:
             logging.info("Already not charging.")
             if current_amperage != min_amperage:
                 client.set_amperage_limit(charger_id, min_amperage)
                 logging.info(f"Amperage set command set for minimum for {min_amperage}A.")
+            current_charging_session = None  # Ensure global session is cleared
         confirmed_amperage = 0
     else:
         if current_amperage != target_amps:
             logging.info(f"Changing amperage from {current_amperage}A to {target_amps}A...")
 
-            was_charging = (charging_status == "CHARGING")
+            was_charging = is_currently_charging()
             if was_charging:
-                session = client.get_charging_session(client.get_user_charging_status().session_id)
-                device_id = session.device_id
-                session.stop()
+                current_charging_session.stop()
+                current_charging_session = None  # Clear global session when stopping
 
             client.set_amperage_limit(charger_id, target_amps)
             logging.info(f"Amperage set command sent for {target_amps}A.")
@@ -174,15 +200,15 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
                 logging.warning(f"Amperage mismatch! Set {target_amps}A but charger reports {confirmed_amperage}A.")
 
             if was_charging:
-                logging.info("Restarting charging session...")
-                client.start_charging_session(device_id)
+                current_charging_session = client.start_charging_session(charger_id)
+                logging.info(f"Restarted charging session: {current_charging_session.session_id}")
         else:
             logging.info(f"Amperage already set correctly ({current_amperage}A). No change needed.")
             confirmed_amperage = current_amperage
 
-        if charging_status == "AVAILABLE" and charger_status.plugged_in:
-            logging.info("Starting charging session...")
-            client.start_charging_session(charger_id)
+        if not is_currently_charging() and charger_status.plugged_in:
+            current_charging_session = client.start_charging_session(charger_id)
+            logging.info(f"Started charging session: {current_charging_session.session_id}")
 
     return confirmed_amperage if target_amps != 0 else 0
 
@@ -201,7 +227,7 @@ def main():
 
     setup_logging(args.log_file, args.quiet)
 
-    email = args.email
+    username = args.username
     password = args.password
     control_interval = args.control_interval  # minutes
     slope_window = args.slope_window  # minutes
@@ -209,7 +235,7 @@ def main():
     logging.info(f"Using {control_interval}-min control interval and {slope_window}-min slope calculation window")
 
     logging.info("Connecting to ChargePoint...")
-    client = ChargePoint(email, password)
+    client = ChargePoint(username, password)
     chargers = client.get_home_chargers()
 
     if not chargers:
@@ -218,6 +244,9 @@ def main():
 
     charger_id = chargers[0]
     logging.info(f"Found charger {charger_id}")
+
+    # Check for existing charging session and initialize global object if active
+    initialize_charging_session_if_active(client, charger_id)
 
     charger_status = client.get_home_charger_status(charger_id)
     allowed_amps = charger_status.possible_amperage_limits

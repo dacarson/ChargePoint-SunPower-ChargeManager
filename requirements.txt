@@ -1,0 +1,5 @@
+# GitHub fork of python-chargepoint (needed for for script)
+git+https://github.com/dacarson/python-chargepoint.git#egg=python-chargepoint
+
+# InfluxDB client for InfluxDB 1.x
+influxdb>=5.3.1

@@ -62,6 +62,7 @@ pip install python-chargepoint influxdb websocket-client requests
 ### PVS6 WebSocket Logger
 
 The WebSocket logger needs to be running continuously to collect data from your SunPower PVS6. It will automatically reconnect if the connection is lost.
+If no data seems to be appearing on the WebSocket interface, make sure it is enabled. Follow instructions at [SunPowerManagement varVars][https://github.com/SunStrong-Management/pypvs/blob/main/doc/LocalAPI.md#set-a-variable-by-name] to enable WebSocket telemetry.
 
 ```bash
 python pvs6_ws_logger.py \

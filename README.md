@@ -25,7 +25,7 @@ Charging amperage is updated every few minutes based on the most recent smoothed
 
 ---
 
-##  Architecture
+## Architecture
 
 1. The PVS6 WebSocket Logger (`pvs6_ws_logger.py`) continuously connects to the SunPower PVS6's WebSocket interface and streams real-time power data.
 2. This data is stored in InfluxDB for historical analysis.
@@ -54,7 +54,7 @@ You will need:
 Install required libraries:
 
 ```bash
-pip install python-chargepoint influxdb websocket-client requests
+pip install -r requirements.txt
 ```
 
 ## Configuration
@@ -62,7 +62,14 @@ pip install python-chargepoint influxdb websocket-client requests
 ### PVS6 WebSocket Logger
 
 The WebSocket logger needs to be running continuously to collect data from your SunPower PVS6. It will automatically reconnect if the connection is lost.
-If no data seems to be appearing on the WebSocket interface, make sure it is enabled. Follow instructions at [SunPowerManagement varVars][https://github.com/SunStrong-Management/pypvs/blob/main/doc/LocalAPI.md#set-a-variable-by-name] to enable WebSocket telemetry.
+
+If no data seems to be appearing on the WebSocket interface, make sure it is enabled. You can use the included `enable_telemetry.sh` script to enable WebSocket telemetry:
+
+```bash
+./enable_telemetry.sh <PVS6_IP_ADDRESS> <SERIAL_NUMBER>
+```
+
+Or follow the manual instructions at [SunPowerManagement varVars](https://github.com/SunStrong-Management/pypvs/blob/main/doc/LocalAPI.md#set-a-variable-by-name).
 
 ```bash
 python pvs6_ws_logger.py \
@@ -204,4 +211,3 @@ See the [LICENSE](LICENSE) file for full license text.
 
 - [python-chargepoint](https://github.com/mbillow/python-chargepoint) by [mbillow](https://github.com/mbillow)  
   Library used to interact with the ChargePoint Home Flex charger via API.
-

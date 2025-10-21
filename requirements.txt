@@ -3,3 +3,5 @@ git+https://github.com/dacarson/python-chargepoint.git#egg=python-chargepoint
 
 # InfluxDB client for InfluxDB 1.x
 influxdb>=5.3.1
+# WebSocket client for WebSocketApp functionality
+websocket-client>=1.6.0

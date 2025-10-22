@@ -9,6 +9,7 @@ import requests
 import base64
 import os
 import urllib3
+import threading
 
 # Disable SSL warnings since we're connecting to local PVS6 devices
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -21,7 +22,28 @@ INFLUX_DB = "pvs6"          # change if needed
 INFLUX_PRECISION = "s"             # seconds
 session = requests.Session()
 
+# Global variables for data monitoring
+last_data_time = None
+telemetry_timer = None
+
 # ############################################################################
+
+def check_data_timeout():
+    """Check if we haven't received data for 5 seconds and re-enable telemetry if needed"""
+    global last_data_time, telemetry_timer
+    
+    if last_data_time is None:
+        return
+    
+    current_time = time.time()
+    if current_time - last_data_time > 5:
+        print("No data received for 5+ seconds. Re-enabling telemetry...")
+        enable_telemetry(args.ip, args.serial_number)
+        last_data_time = current_time  # Reset the timer
+    
+    # Schedule the next check in 1 second
+    telemetry_timer = threading.Timer(1.0, check_data_timeout)
+    telemetry_timer.start()
 
 def enable_telemetry(ip_address, serial_number):
     """
@@ -157,8 +179,14 @@ def influxdb_publish(measurement, fields, timestamp=None):
 
 
 def on_message(ws, message):
+    global last_data_time
+    
     try:
         data = json.loads(message)
+        
+        # Update the last data received time
+        last_data_time = time.time()
+        
         if args.raw or args.verbose:
             pprint(data)
 
@@ -178,14 +206,33 @@ def on_error(ws, error):
 
 
 def on_close(ws, close_status_code, close_msg):
+    global telemetry_timer
+    
     print("WebSocket closed:", close_status_code, close_msg)
+    
+    # Stop the data monitoring timer
+    if telemetry_timer:
+        telemetry_timer.cancel()
+        telemetry_timer = None
 
 
 def on_open_with_telemetry(ws):
     """WebSocket on_open handler that enables telemetry after connection is established"""
+    global last_data_time, telemetry_timer
+    
     print("WebSocket connection opened (verbose={})".format(bool(args.verbose)))
     print("Enabling telemetry...")
     enable_telemetry(args.ip, args.serial_number)
+    
+    # Initialize data monitoring
+    last_data_time = time.time()
+    
+    # Start the data timeout checker
+    if telemetry_timer:
+        telemetry_timer.cancel()
+    telemetry_timer = threading.Timer(1.0, check_data_timeout)
+    telemetry_timer.start()
+    print("Data monitoring timer started")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

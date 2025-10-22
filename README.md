@@ -63,23 +63,13 @@ pip install -r requirements.txt
 
 The WebSocket logger needs to be running continuously to collect data from your SunPower PVS6. It will automatically reconnect if the connection is lost.
 
-If no data seems to be appearing on the WebSocket interface, make sure it is enabled. You can use the included `enable_telemetry.sh` script to enable WebSocket telemetry:
-
-```bash
-./enable_telemetry.sh <PVS6_IP_ADDRESS> <SERIAL_NUMBER>
-```
-
-Or follow the manual instructions at [SunPowerManagement varVars](https://github.com/SunStrong-Management/pypvs/blob/main/doc/LocalAPI.md#set-a-variable-by-name).
+**Automatic Telemetry Enablement**: The script now automatically enables WebSocket telemetry when needed. It establishes the WebSocket connection first, then enables telemetry to ensure proper data flow. This eliminates the need to manually run the `enable_telemetry.sh` script.
 
 ```bash
 python pvs6_ws_logger.py \
-  --ws_url "ws://your-pvs6-ip:9002" \
+  --ip "your-pvs6-ip" \
+  --serial_number "1234567890" \
   --influxdb \
-  --influxdb-host "localhost" \
-  --influxdb-port 8086 \
-  --influxdb-user "your_influx_user" \
-  --influxdb-pass "your_influx_password" \
-  --influxdb-db "pvs6" \
   --verbose
 ```
 
@@ -87,15 +77,13 @@ python pvs6_ws_logger.py \
 
 | Argument&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Required? | Description |
 |:---|:---|:---|
-| `--ws_url` | ❌ | (default: ws://172.27.153.1:9002) WebSocket URL of the PVS6 |
+| `--ip` | ❌ | (default: 172.27.153.1) IP address of the PVS6 |
+| `--serial_number` | ✅ | Serial number of the PVS6 (required for telemetry enablement) |
 | `--raw` | ❌ | Print raw data to stdout |
 | `--influxdb` | ❌ | Enable publishing to InfluxDB |
-| `--influxdb_host` | ❌ | (default: localhost) InfluxDB host |
-| `--influxdb_port` | ❌ | (default: 8086) InfluxDB port |
-| `--influxdb_user` | ✅ | InfluxDB username |
-| `--influxdb_pass` | ✅ | InfluxDB password |
-| `--influxdb_db` | ❌ | (default: pvs6) InfluxDB database name |
 | `--verbose` | ❌ | Enable verbose output |
+
+**Note**: The WebSocket port is always 9002 and is automatically appended to the IP address.
 
 ### Solar Charge Controller
 
@@ -190,7 +178,7 @@ The configuration files in `/etc/default/` allow you to set command-line argumen
 
 - `/etc/default/pvs6_ws_logger`:
   ```bash
-  CMDARGS="--influxdb --influxdb_user $INFLUX_USER --influxdb_pass $INFLUX_PASS"
+  CMDARGS="--ip $PVS6_IP --serial_number $PVS6_SERIAL --influxdb --verbose"
   ```
 
 - `/etc/default/solar_charge_controller`:

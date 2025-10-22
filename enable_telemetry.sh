@@ -39,8 +39,18 @@ echo "Enabling web socket telemetry..."
 TELEMETRY_RESPONSE=$(curl -s -k \
     -b cookies.txt \
     -c cookies.txt \
+    https://$IP_ADDRESS/vars?match=telemetryws)
+
+echo "Current Telemetry response: $TELEMETRY_RESPONSE"
+
+echo "Enabling web socket telemetry..."
+
+# Enable web socket telemetry
+SET_TELEMETRY_RESPONSE=$(curl -s -k \
+    -b cookies.txt \
+    -c cookies.txt \
     https://$IP_ADDRESS/vars?set=/sys/telemetryws/enable=1)
 
-echo "Telemetry response: $TELEMETRY_RESPONSE"
+echo "Set telemetry response: $SET_TELEMETRY_RESPONSE"
 
 echo "Done!"

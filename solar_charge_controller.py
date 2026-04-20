@@ -2,6 +2,8 @@ import sys
 import time
 import logging
 import argparse
+from datetime import datetime
+import pytz
 from python_chargepoint import ChargePoint
 from python_chargepoint.exceptions import ChargePointCommunicationException
 from influxdb import InfluxDBClient
@@ -11,6 +13,38 @@ from influxdb import InfluxDBClient
 current_charging_session = None
 # Cache the last known good charging power (in watts) to use on transient API errors
 last_known_charging_watts = 0.0
+
+# --- TOU HELPERS ---
+
+_PACIFIC = pytz.timezone("America/Los_Angeles")
+
+def get_tou_period():
+    """Return current TOU period: 'peak', 'part_peak', or 'off_peak' (Pacific time)."""
+    now_pt = datetime.now(_PACIFIC)
+    h = now_pt.hour
+    if 16 <= h < 21:
+        return "peak"
+    if h < 15:
+        return "off_peak"
+    return "part_peak"
+
+def get_tou_excess_threshold(base_minimum_watts, tou_period):
+    """
+    Return the minimum excess solar watts required to start/continue EV charging.
+
+    Peak      — require 2× the base minimum so marginal solar is exported rather
+                than used for EV charging (export earns bonus credit; peak imports
+                are the most expensive rate on the bill).
+    Part Peak — use the base minimum as-is (transition period, moderate rates).
+    Off Peak  — allow up to 500W of grid draw before stopping, so the EV charges
+                through brief solar gaps at the cheapest rate rather than
+                stop/starting constantly.
+    """
+    if tou_period == "peak":
+        return base_minimum_watts * 2.0
+    if tou_period == "off_peak":
+        return -500.0   # negative = tolerate 500W grid draw before stopping
+    return base_minimum_watts  # part_peak: unchanged
 
 # --- FUNCTIONS ---
 
@@ -33,6 +67,14 @@ def parse_args():
     parser.add_argument("--slope-window", type=int, default=30, help="Time window in minutes for slope calculation (default: 30)")
     parser.add_argument("--log-file", default="solar_charge_controller.log", help="Log file path")
     parser.add_argument("--quiet", action="store_true", help="Suppress console logging")
+
+    # TOU-aware charging options
+    parser.add_argument("--peak-excess-multiplier", type=float, default=2.0,
+        help="Multiply minimum_watts_required during Peak hours (default: 2.0). "
+             "Higher = less EV charging during peak, more solar exported.")
+    parser.add_argument("--offpeak-grid-tolerance", type=float, default=500.0,
+        help="Watts of grid draw to tolerate during Off Peak before stopping "
+             "EV charging (default: 500W). Prevents stop/start on solar dips.")
 
     return parser.parse_args()
 
@@ -513,6 +555,8 @@ def main():
     allowed_amps = charger_status.possible_amperage_limits
     min_amperage = min(allowed_amps)
     minimum_watts_required = (min_amperage - 0.5) * 240
+    peak_excess_multiplier  = args.peak_excess_multiplier
+    offpeak_grid_tolerance  = args.offpeak_grid_tolerance
 
     logging.info(f"Minimum amperage is {min_amperage}A, requiring at least {minimum_watts_required}W of solar excess to start charging.")
 
@@ -576,26 +620,37 @@ def main():
                 time.sleep(60)
                 continue
 
+            tou_period = get_tou_period()
+            tou_threshold = get_tou_excess_threshold(
+                minimum_watts_required, tou_period,
+            )
+            # Override multiplier/tolerance from CLI args
+            if tou_period == 'peak':
+                tou_threshold = minimum_watts_required * peak_excess_multiplier
+            elif tou_period == 'off_peak':
+                tou_threshold = -1.0 * offpeak_grid_tolerance
+            logging.info(f"TOU period: {tou_period}, excess threshold: {tou_threshold:.0f}W (base: {minimum_watts_required:.0f}W)")
+
             if production < 500:
-                # After-hours heuristic: normally charge fast if plugged in,
-                # but respect TOU schedule to avoid peak rates.
-                is_off_peak = getattr(charger_status, "is_during_scheduled_time", None)
-                if is_off_peak is True:
-                    target_amps = max(allowed_amps)
-                    logging.info(f"Low production ({production:.1f}W) and OFF-PEAK per charger schedule; setting to max amperage {target_amps}A for fast charging.")
-                elif is_off_peak is False:
+                # After-hours / low-sun: respect TOU to decide whether to charge
+                if tou_period == 'peak':
                     target_amps = 0
-                    logging.info(f"Low production ({production:.1f}W) but PEAK per charger schedule; deferring charging until off-peak (target_amps=0).")
+                    logging.info(f"Low production ({production:.1f}W) during Peak hours; stopping to avoid peak rates.")
                 else:
-                    # Fallback if charger_status lacks the field: maintain previous behavior
-                    target_amps = max(allowed_amps)
-                    logging.info(f"Low production ({production:.1f}W) and schedule unknown; defaulting to max amperage {target_amps}A.")
-            elif predicted_excess >= minimum_watts_required:
+                    # Off-peak or part-peak: charge at max if schedule allows
+                    is_off_peak = getattr(charger_status, "is_during_scheduled_time", None)
+                    if is_off_peak is False:
+                        target_amps = 0
+                        logging.info(f"Low production ({production:.1f}W), {tou_period}, but charger schedule says PEAK; deferring.")
+                    else:
+                        target_amps = max(allowed_amps)
+                        logging.info(f"Low production ({production:.1f}W), {tou_period}; charging at max {target_amps}A.")
+            elif predicted_excess >= tou_threshold:
                 target_amps = determine_target_amperage(predicted_excess, allowed_amps)
-                logging.info(f"Predicted excess solar ({predicted_excess:.1f}W). Setting amperage to {target_amps}A.")
+                logging.info(f"Excess solar ({predicted_excess:.1f}W) >= {tou_period} threshold ({tou_threshold:.0f}W). Setting {target_amps}A.")
             else:
                 target_amps = 0
-                logging.info(f"Insufficient predicted excess solar ({predicted_excess:.1f}W) < minimum ({minimum_watts_required:.1f}W). Stopping charging.")
+                logging.info(f"Excess solar ({predicted_excess:.1f}W) below {tou_period} threshold ({tou_threshold:.0f}W). Stopping charging.")
                 
             if ((time.time() - last_control_change) >  (control_interval * 60)):
                 current_amperage = charger_status.amperage_limit

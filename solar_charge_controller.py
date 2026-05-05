@@ -637,14 +637,18 @@ def main():
                     target_amps = 0
                     logging.info(f"Low production ({production:.1f}W) during Peak hours; stopping to avoid peak rates.")
                 else:
-                    # Off-peak or part-peak: charge at max if schedule allows
+                    # Off-peak or part-peak: only charge at max when schedule state is explicitly true.
+                    # Treat unknown schedule state (None/missing) as not allowed to avoid accidental pre-sunrise charging.
                     is_off_peak = getattr(charger_status, "is_during_scheduled_time", None)
-                    if is_off_peak is False:
-                        target_amps = 0
-                        logging.info(f"Low production ({production:.1f}W), {tou_period}, but charger schedule says PEAK; deferring.")
-                    else:
+                    if is_off_peak is True:
                         target_amps = max(allowed_amps)
                         logging.info(f"Low production ({production:.1f}W), {tou_period}; charging at max {target_amps}A.")
+                    else:
+                        target_amps = 0
+                        logging.info(
+                            f"Low production ({production:.1f}W), {tou_period}, but schedule window is not confirmed "
+                            f"(is_during_scheduled_time={is_off_peak}); deferring."
+                        )
             elif predicted_excess >= tou_threshold:
                 target_amps = determine_target_amperage(predicted_excess, allowed_amps)
                 logging.info(f"Excess solar ({predicted_excess:.1f}W) >= {tou_period} threshold ({tou_threshold:.0f}W). Setting {target_amps}A.")

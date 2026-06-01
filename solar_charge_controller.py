@@ -562,6 +562,10 @@ def main():
 
     last_control_change = 0
     last_set_amperage = None
+    prev_charging_watts = 0
+    prev_target_amps = 0
+    external_stop_recovery = False
+    external_stop_time = None
 
     while True:
         try:
@@ -595,6 +599,29 @@ def main():
                 except Exception as e:
                     logging.warning(f"Failed to fetch session snapshot: {e}")
             current_charging_watts = get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot)
+
+            # Detect charging transitions and adjust control interval accordingly
+            if prev_charging_watts > 0 and current_charging_watts == 0:
+                # Car stopped. If previous target wanted charging, this was an external stop.
+                if prev_target_amps > 0:
+                    external_stop_recovery = True
+                    external_stop_time = time.time()
+                    logging.info("Car externally stopped while charging was desired; checking every minute for restart.")
+            elif current_charging_watts > 0:
+                if external_stop_recovery:
+                    external_stop_recovery = False
+                    logging.info("Car restarted after external stop; returning to normal control interval.")
+                elif prev_charging_watts == 0:
+                    logging.info("Car detected as newly charging; bypassing control interval for immediate adjustment.")
+                    last_control_change = 0
+
+            # Stop the bypass after 10 minutes to avoid excessive API calls if car stays stopped
+            if external_stop_recovery and external_stop_time and (time.time() - external_stop_time) > 600:
+                external_stop_recovery = False
+                logging.info("Car has been stopped for >10 minutes; resuming normal control interval.")
+
+            prev_charging_watts = current_charging_watts
+
             average_excess = -1 * (consumption - current_charging_watts)
             predicted_excess = average_excess + (solar_slope * control_interval * 60)
 
@@ -656,7 +683,7 @@ def main():
                 target_amps = 0
                 logging.info(f"Excess solar ({predicted_excess:.1f}W) below {tou_period} threshold ({tou_threshold:.0f}W). Stopping charging.")
                 
-            if ((time.time() - last_control_change) >  (control_interval * 60)):
+            if ((time.time() - last_control_change) > (control_interval * 60)) or external_stop_recovery:
                 current_amperage = charger_status.amperage_limit
                 if charging_status_val == "CHARGING" and current_amperage == 40 and last_set_amperage != 40:
                     logging.info("User likely set charger to 40A manually. Skipping adjustment.")
@@ -687,7 +714,8 @@ def main():
                 target_amps,
                 current_amperage
             )
-            
+
+            prev_target_amps = target_amps
             time.sleep(60)
 
         except Exception as e:

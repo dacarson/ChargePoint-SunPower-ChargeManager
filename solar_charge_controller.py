@@ -601,6 +601,7 @@ def main():
             current_charging_watts = get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot)
 
             # Detect charging transitions and adjust control interval accordingly
+            correct_for_lag = False
             if prev_charging_watts > 0 and current_charging_watts == 0:
                 # Car stopped. If previous target wanted charging, this was an external stop.
                 if prev_target_amps > 0:
@@ -612,8 +613,13 @@ def main():
                     external_stop_recovery = False
                     logging.info("Car restarted after external stop; returning to normal control interval.")
                 elif prev_charging_watts == 0:
+                    # Genuine new session: fire an immediate adjustment but correct for the
+                    # net_p lag. The 5-min average still reflects the no-car period, so using
+                    # current_charging_watts in the excess formula double-counts the car load.
+                    # Using 0 gives: average_excess = -net_p_avg = solar - house_non_car.
                     logging.info("Car detected as newly charging; bypassing control interval for immediate adjustment.")
                     last_control_change = 0
+                    correct_for_lag = True
 
             # Stop the bypass after 10 minutes to avoid excessive API calls if car stays stopped
             if external_stop_recovery and external_stop_time and (time.time() - external_stop_time) > 600:
@@ -622,8 +628,13 @@ def main():
 
             prev_charging_watts = current_charging_watts
 
-            average_excess = -1 * (consumption - current_charging_watts)
+            # When the net_p average is lagged (car just started), use 0 for the car's
+            # contribution so the excess reflects real solar surplus minus house load only.
+            excess_charging_watts = 0 if correct_for_lag else current_charging_watts
+            average_excess = -1 * (consumption - excess_charging_watts)
             predicted_excess = average_excess + (solar_slope * control_interval * 60)
+            if correct_for_lag:
+                logging.info(f"Correcting excess for net_p lag (new session): using 0W car load for excess calculation.")
 
             # Log charging status debug info periodically
             if user_charging_status is not None:

@@ -376,8 +376,20 @@ def get_current_charging_watts(client, charger_id, charger_status, user_charging
                 last_known_charging_watts = 0
                 return 0
 
-        # Waiting -> estimate from amperage
+        # Waiting -> estimate from amperage, but only if the charger is actually
+        # delivering power. If the charger reports CHARGING_STOPPED the amperage
+        # limit is set but no current flows, so net_p carries no car load.
+        # Estimating from the limit in that state causes the excess formula to
+        # add back watts that were never in net_p (phantom double-count).
         if status.state == "waiting":
+            charging_stopped = (
+                hasattr(charger_status, "charging_status") and
+                str(charger_status.charging_status) in ("CHARGING_STOPPED", "AVAILABLE", "IDLE")
+            )
+            if charging_stopped:
+                logging.info(f"Waiting state with charger {charger_status.charging_status}; no power flowing, returning 0W.")
+                last_known_charging_watts = 0
+                return 0
             watts = _estimate_from_amperage(charger_status)
             last_known_charging_watts = watts
             return watts

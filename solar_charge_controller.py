@@ -701,7 +701,20 @@ def main():
                         )
             elif predicted_excess >= tou_threshold:
                 target_amps = determine_target_amperage(predicted_excess, allowed_amps)
-                logging.info(f"Excess solar ({predicted_excess:.1f}W) >= {tou_period} threshold ({tou_threshold:.0f}W). Setting {target_amps}A.")
+                # Hysteresis: the tou_threshold governs when to *stop* an active session
+                # (e.g. off-peak tolerates -500W grid draw to avoid stop/start on brief dips).
+                # To *start* a new session we always require at least minimum_watts_required
+                # so that a rising solar slope does not prematurely kick off charging when
+                # the actual excess is far below the minimum charging rate.
+                if target_amps > 0 and current_charging_watts == 0 and predicted_excess < minimum_watts_required:
+                    target_amps = 0
+                    logging.info(
+                        f"Predicted excess ({predicted_excess:.1f}W) is above {tou_period} stop threshold "
+                        f"({tou_threshold:.0f}W) but below minimum start threshold "
+                        f"({minimum_watts_required:.1f}W); deferring until solar is sufficient."
+                    )
+                else:
+                    logging.info(f"Excess solar ({predicted_excess:.1f}W) >= {tou_period} threshold ({tou_threshold:.0f}W). Setting {target_amps}A.")
             else:
                 target_amps = 0
                 logging.info(f"Excess solar ({predicted_excess:.1f}W) below {tou_period} threshold ({tou_threshold:.0f}W). Stopping charging.")

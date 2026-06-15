@@ -579,55 +579,54 @@ async def main():
 
     logging.info("Connecting to ChargePoint...")
     client = None
-    if not args.no_token_cache:
-        cached_token = _load_cached_token(username)
-        if cached_token:
-            try:
-                client = await ChargePoint.create(username, coulomb_token=cached_token)
-                logging.info("Resumed ChargePoint session from cached token.")
-            except Exception as e:
-                logging.warning(f"Cached token invalid ({e}); re-authenticating.")
-                _clear_cached_token(username)
-                client = None
-
-    if client is None:
-        client = await ChargePoint.create(username)
-        await client.login_with_password(password)
-        if not args.no_token_cache:
-            _save_cached_token(username, client.coulomb_token)
-            logging.info("Logged in and cached new session token.")
-
-    chargers = await client.get_home_chargers()
-
-    if not chargers:
-        logging.error("No home chargers found.")
-        await client.close()
-        sys.exit(1)
-
-    charger_id = chargers[0]
-    logging.info(f"Found charger {charger_id}")
-
-    # Check for existing charging session and initialize global object if active
-    await initialize_charging_session_if_active(client, charger_id)
-
-    charger_status = await client.get_home_charger_status(charger_id)
-    allowed_amps = charger_status.possible_amperage_limits
-    min_amperage = min(allowed_amps)
-    minimum_watts_required = (min_amperage - 0.5) * 240
-    peak_excess_multiplier  = args.peak_excess_multiplier
-    offpeak_grid_tolerance  = args.offpeak_grid_tolerance
-    no_overnight_months     = set(args.no_overnight_months)
-
-    logging.info(f"Minimum amperage is {min_amperage}A, requiring at least {minimum_watts_required}W of solar excess to start charging.")
-
-    last_control_change = 0
-    last_set_amperage = None
-    prev_charging_watts = 0
-    prev_target_amps = 0
-    external_stop_recovery = False
-    external_stop_time = None
-
     try:
+        if not args.no_token_cache:
+            cached_token = _load_cached_token(username)
+            if cached_token:
+                try:
+                    client = await ChargePoint.create(username, coulomb_token=cached_token)
+                    logging.info("Resumed ChargePoint session from cached token.")
+                except Exception as e:
+                    logging.warning(f"Cached token invalid ({e}); re-authenticating.")
+                    _clear_cached_token(username)
+                    client = None
+
+        if client is None:
+            client = await ChargePoint.create(username)
+            await client.login_with_password(password)
+            if not args.no_token_cache:
+                _save_cached_token(username, client.coulomb_token)
+                logging.info("Logged in and cached new session token.")
+
+        chargers = await client.get_home_chargers()
+
+        if not chargers:
+            logging.error("No home chargers found.")
+            sys.exit(1)
+
+        charger_id = chargers[0]
+        logging.info(f"Found charger {charger_id}")
+
+        # Check for existing charging session and initialize global object if active
+        await initialize_charging_session_if_active(client, charger_id)
+
+        charger_status = await client.get_home_charger_status(charger_id)
+        allowed_amps = charger_status.possible_amperage_limits
+        min_amperage = min(allowed_amps)
+        minimum_watts_required = (min_amperage - 0.5) * 240
+        peak_excess_multiplier  = args.peak_excess_multiplier
+        offpeak_grid_tolerance  = args.offpeak_grid_tolerance
+        no_overnight_months     = set(args.no_overnight_months)
+
+        logging.info(f"Minimum amperage is {min_amperage}A, requiring at least {minimum_watts_required}W of solar excess to start charging.")
+
+        last_control_change = 0
+        last_set_amperage = None
+        prev_charging_watts = 0
+        prev_target_amps = 0
+        external_stop_recovery = False
+        external_stop_time = None
+
         while True:
             try:
                 solar = get_solar_power_status(influx_client, control_interval, slope_window)
@@ -812,6 +811,11 @@ async def main():
             except InvalidSession as e:
                 logging.warning(f"Session expired mid-run ({e.message}); clearing cache and re-authenticating.")
                 _clear_cached_token(username)
+                old_client, client = client, None
+                try:
+                    await old_client.close()
+                except Exception:
+                    pass
                 try:
                     client = await ChargePoint.create(username)
                     await client.login_with_password(password)
@@ -825,7 +829,8 @@ async def main():
                 logging.error(f"Error in main loop: {e}")
                 await asyncio.sleep(control_interval * 60)
     finally:
-        await client.close()
+        if client is not None:
+            await client.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

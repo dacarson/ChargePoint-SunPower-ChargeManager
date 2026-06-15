@@ -91,7 +91,7 @@ Once the WebSocket logger is running and collecting data, you can start the sola
 
 ```bash
 python solar_charge_controller.py \
-  --email "your@email.com" \
+  --username "your@email.com" \
   --password "yourpassword" \
   --influxdb-host "localhost" \
   --influxdb-port 8086 \
@@ -108,7 +108,7 @@ python solar_charge_controller.py \
 
 | Argument&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | Required? | Description |
 |:---|:---|:---|
-| `--email` | ✅ | ChargePoint account email address |
+| `--username` | ✅ | ChargePoint account username or email address |
 | `--password` | ✅ | ChargePoint account password |
 | `--influxdb-host` | ❌ | (default: localhost) InfluxDB host |
 | `--influxdb-port` | ❌ | (default: 8086) InfluxDB port |
@@ -119,6 +119,9 @@ python solar_charge_controller.py \
 | `--slope-window` | ❌ | (default: 30) Time window in minutes for calculating solar power trends. A longer window provides more stable predictions by smoothing out short-term fluctuations. |
 | `--log-file` | ❌ | (default: `solar_charge_controller.log`) File to write logs to |
 | `--quiet` | ❌ | Suppress console output, log only to file |
+| `--no-token-cache` | ❌ | Disable session token caching; always log in with password. Useful for debugging. |
+
+Session tokens are cached at `~/.chargepoint/token_<hash>.json` to avoid a full password login on each startup. The cache is automatically invalidated if the token is rejected by the API.
 
 ## Systemd Service Installation
 
@@ -183,7 +186,7 @@ The configuration files in `/etc/default/` allow you to set command-line argumen
 
 - `/etc/default/solar_charge_controller`:
   ```bash
-  CMDARGS="--influxdb-user $INFLUX_USER --influxdb-pass $INFLUX_PASS --email $CHARGEPOINT_EMAIL --password $CHARGEPOINT_PASS --log-file /home/pi/ChargePoint-SunPower-ChargeManager/solar_charge_controller.log --quiet"
+  CMDARGS="--influxdb-user $INFLUX_USER --influxdb-pass $INFLUX_PASS --username $CHARGEPOINT_USERNAME --password $CHARGEPOINT_PASS --log-file /home/pi/ChargePoint-SunPower-ChargeManager/solar_charge_controller.log --quiet"
   ```
 
 You can add or modify arguments in these files to customize the behavior of each service. After making changes, restart the services for them to take effect.

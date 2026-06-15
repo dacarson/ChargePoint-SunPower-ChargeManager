@@ -1,7 +1,8 @@
-# GitHub fork of python-chargepoint (needed for for script)
-git+https://github.com/dacarson/python-chargepoint.git#egg=python-chargepoint
+# Upstream python-chargepoint library
+python-chargepoint>=2.3.2
 
 # InfluxDB client for InfluxDB 1.x
 influxdb>=5.3.1
-# WebSocket client for WebSocketApp functionality
+
+# WebSocket client — used by pvs6_ws_logger.py (not needed by solar_charge_controller.py)
 websocket-client>=1.6.0

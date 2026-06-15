@@ -1,12 +1,43 @@
 import sys
 import time
+import asyncio
 import logging
 import argparse
+import json
+import hashlib
 from datetime import datetime
+from pathlib import Path
 import pytz
 from python_chargepoint import ChargePoint
-from python_chargepoint.exceptions import ChargePointCommunicationException
+from python_chargepoint.exceptions import CommunicationError, InvalidSession
 from influxdb import InfluxDBClient
+
+# --- TOKEN CACHE ---
+
+_TOKEN_CACHE_DIR = Path.home() / ".chargepoint"
+
+def _token_cache_path(username: str) -> Path:
+    h = hashlib.sha256(username.encode()).hexdigest()[:16]
+    return _TOKEN_CACHE_DIR / f"token_{h}.json"
+
+def _load_cached_token(username: str) -> str | None:
+    path = _token_cache_path(username)
+    try:
+        return json.loads(path.read_text())["coulomb_token"]
+    except Exception:
+        return None
+
+def _save_cached_token(username: str, token: str) -> None:
+    _TOKEN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _token_cache_path(username)
+    path.write_text(json.dumps({"coulomb_token": token}))
+    path.chmod(0o600)
+
+def _clear_cached_token(username: str) -> None:
+    try:
+        _token_cache_path(username).unlink(missing_ok=True)
+    except Exception:
+        pass
 
 # --- GLOBAL VARIABLES ---
 
@@ -87,6 +118,8 @@ def parse_args():
         help="Month numbers (1-12) during which overnight grid charging is disabled "
              "(default: 6 7 8 9 — June through September, sunniest months in "
              "San Francisco). Pass an empty list to always allow overnight charging.")
+    parser.add_argument("--no-token-cache", action="store_true",
+        help="Disable session token caching; always log in with password.")
 
     return parser.parse_args()
 
@@ -119,19 +152,19 @@ def log_control_metrics_to_influx(influx_client, solar_slope, predicted_excess, 
     except Exception as e:
         logging.warning(f"Failed to write control metrics to InfluxDB: {e}")
 
-def log_charging_status_debug(client, charging_status, charger_status=None, session_snapshot=None):
+async def log_charging_status_debug(client, charging_status, charger_status=None, session_snapshot=None):
     """Log detailed charging status information for debugging."""
     if not charging_status:
         logging.info("No charging status available")
         return
     
     try:
-        session = session_snapshot if session_snapshot is not None else client.get_charging_session(charging_status.session_id)
+        session = session_snapshot if session_snapshot is not None else await client.get_charging_session(charging_status.session_id)
         if charger_status is None:
-            charger_status = client.get_home_charger_status_v2(charging_status.stations[0].id)
+            charger_status = await client.get_home_charger_status(charging_status.stations[0].id)
         logging.info(f"=== CHARGING STATUS DEBUG ===")
         logging.info(f"UserChargingStatus.state: {charging_status.state}")
-        logging.info(f"HomeChargerStatusV2.charging_status: {charger_status.charging_status}")
+        logging.info(f"HomeChargerStatus.charging_status: {charger_status.charging_status}")
         logging.info(f"Session.charging_state: {session.charging_state}")
         logging.info(f"Session.power_kw: {session.power_kw}")
         logging.info(f"Session.energy_kwh: {session.energy_kwh}")
@@ -216,7 +249,7 @@ def determine_target_amperage(avg_excess_solar_watts, allowed_amps, voltage=240)
     result = min(possible_amps)
     return result
 
-def initialize_charging_session_if_active(client, charger_id, charger_status=None, user_charging_status=None, session_snapshot=None):
+async def initialize_charging_session_if_active(client, charger_id, charger_status=None, user_charging_status=None, session_snapshot=None):
     """
     Determine whether an active charging session exists and, if so, initialize
     the global current_charging_session.
@@ -231,7 +264,7 @@ def initialize_charging_session_if_active(client, charger_id, charger_status=Non
 
     # 1) Get user charging status (primary signal)
     try:
-        status = user_charging_status if user_charging_status is not None else client.get_user_charging_status()
+        status = user_charging_status if user_charging_status is not None else await client.get_user_charging_status()
     except Exception as e:
         logging.warning(f"Failed to fetch user charging status: {e}")
         return False
@@ -247,7 +280,7 @@ def initialize_charging_session_if_active(client, charger_id, charger_status=Non
     # 2) Try to fetch device status (secondary signal). If this fails, we continue
     # where possible, but must return False if we cannot confidently determine activity.
     try:
-        device_status = charger_status if charger_status is not None else client.get_home_charger_status_v2(charger_id)
+        device_status = charger_status if charger_status is not None else await client.get_home_charger_status(charger_id)
     except Exception as e:
         device_status = None
         logging.warning(f"Failed to fetch home charger status: {e}")
@@ -255,7 +288,7 @@ def initialize_charging_session_if_active(client, charger_id, charger_status=Non
     # 3) Fully charged: consider active only if still drawing meaningful power
     if state == "fully_charged":
         try:
-            sess = session_snapshot if session_snapshot is not None else client.get_charging_session(status.session_id)
+            sess = session_snapshot if session_snapshot is not None else await client.get_charging_session(status.session_id)
             power_kw = getattr(sess, "power_kw", 0.0) if sess else 0.0
             if sess and power_kw >= 0.1:
                 current_charging_session = sess
@@ -271,7 +304,7 @@ def initialize_charging_session_if_active(client, charger_id, charger_status=Non
     # 4) Active states -> ensure we can fetch/initialize the session
     if state in ("waiting", "in_use") or (device_status and getattr(device_status, "charging_status", None) == "CHARGING"):
         try:
-            current_charging_session = session_snapshot if session_snapshot is not None else client.get_charging_session(status.session_id)
+            current_charging_session = session_snapshot if session_snapshot is not None else await client.get_charging_session(status.session_id)
             logging.info(f"Found and initialized global charging session: {current_charging_session.session_id}")
             return True
         except Exception as e:
@@ -285,7 +318,7 @@ def initialize_charging_session_if_active(client, charger_id, charger_status=Non
 
 
 
-def get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot=None):
+async def get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot=None):
     """Return present charging load (W). Clears session and returns 0W if not charging/unplugged."""
     global current_charging_session
     global last_known_charging_watts
@@ -305,7 +338,7 @@ def get_current_charging_watts(client, charger_id, charger_status, user_charging
     # Ensure we can rely on the current_charging_session state
     init_reliable = True
     if current_charging_session is None:
-        init_reliable = initialize_charging_session_if_active(client, charger_id, charger_status, user_charging_status, session_snapshot)
+        init_reliable = await initialize_charging_session_if_active(client, charger_id, charger_status, user_charging_status, session_snapshot)
 
     if not init_reliable:
         logging.info("Session initialization not reliable; returning last known charging watts.")
@@ -317,16 +350,13 @@ def get_current_charging_watts(client, charger_id, charger_status, user_charging
         return 0
 
     try:
-        # logging.info(f"get_current_charging_watts current_charging_session: {current_charging_session}")
-
         status = user_charging_status
-        # logging.info(f"Checking charging status for active charging session: {status}")
 
         # We are charging as we have a valid current_charging_session, but the user_charging_status is None -> last_known_charging_watts
         if status is None:
             # If the car is unplugged or charger is clearly stopped, clear the session
             try:
-                unplugged = hasattr(charger_status, "plugged_in") and (not charger_status.plugged_in)
+                unplugged = hasattr(charger_status, "is_plugged_in") and (not charger_status.is_plugged_in)
             except Exception:
                 unplugged = False
 
@@ -371,7 +401,7 @@ def get_current_charging_watts(client, charger_id, charger_status, user_charging
         # Fully charged -> only keep if still drawing meaningful power
         if status.state == "fully_charged":
             try:
-                session = session_snapshot if session_snapshot is not None else client.get_charging_session(status.session_id)
+                session = session_snapshot if session_snapshot is not None else await client.get_charging_session(status.session_id)
                 power_kw = getattr(session, "power_kw", None)
                 if power_kw is not None and power_kw >= POWER_THRESHOLD_KW:
                     watts = int(power_kw * 1000)
@@ -411,7 +441,7 @@ def get_current_charging_watts(client, charger_id, charger_status, user_charging
             try:
                 sess = session_snapshot if session_snapshot is not None else current_charging_session
                 if session_snapshot is None:
-                    sess.refresh()
+                    await sess.async_refresh()
                 actual_kw = sess.update_data[-1].power_kw
                 watts = int(actual_kw * 1000)
                 logging.info(f"Car is in use, using actual measurement: {watts}W")
@@ -430,19 +460,19 @@ def get_current_charging_watts(client, charger_id, charger_status, user_charging
 
     except Exception as e:
         logging.warning(
-    f"Failed to refresh cached charging session: {e}. Charger plugged_in={getattr(charger_status, 'plugged_in', 'unknown')} status={getattr(charger_status, 'charging_status', 'unknown')}. Returning last known charging watts ({last_known_charging_watts}W)."
-)
+            f"Failed to refresh cached charging session: {e}. Charger is_plugged_in={getattr(charger_status, 'is_plugged_in', 'unknown')} status={getattr(charger_status, 'charging_status', 'unknown')}. Returning last known charging watts ({last_known_charging_watts}W)."
+        )
         # Do not clear the session here; transient API errors are common.
         return last_known_charging_watts
 
-def apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage, user_charging_status=None, session_snapshot=None):
+async def apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage, user_charging_status=None, session_snapshot=None):
     global current_charging_session
     current_amperage = charger_status.amperage_limit
 
     if target_amps == 0:
-        if get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot) > 0:
+        if await get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot) > 0:
             if current_charging_session is not None:
-                current_charging_session.stop()
+                await current_charging_session.stop()
                 current_charging_session = None  # Clear global session when stopping
                 logging.info("Stopped charging and cleared global session.")
             else:
@@ -450,7 +480,7 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
         else:
             logging.info("Already not charging.")
             if current_amperage != min_amperage:
-                client.set_amperage_limit(charger_id, min_amperage)
+                await client.set_amperage_limit(charger_id, min_amperage)
                 logging.info(f"Amperage set command set for minimum for {min_amperage}A.")
             current_charging_session = None  # Ensure global session is cleared
         confirmed_amperage = 0
@@ -458,37 +488,23 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
         if current_amperage != target_amps:
             logging.info(f"Changing amperage from {current_amperage}A to {target_amps}A...")
 
-            was_charging = get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot) > 0
-            
+            was_charging = await get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot) > 0
+
             if was_charging and current_charging_session is not None:
-                # Use the new API to change amperage during active charging
+                # Try setting the amperage limit directly during an active session.
+                # If the charger applies it without interruption, no stop/start is needed.
                 try:
-                    logging.info(f"Using new API to change amperage during active charging session: {current_charging_session.session_id}")
-                    response = current_charging_session.set_charge_amperage_limit(target_amps)
-                    logging.info(f"Amperage limit change response: {response.status} (desired: {response.desired_value}A)")
-                    
-                    if response.status == "APPLYING":
-                        logging.info("Amperage limit change is being applied to the charger")
-                        confirmed_amperage = target_amps
-                    else:
-                        logging.warning(f"Unexpected amperage limit response status: {response.status}")
-                        # Fall back to old method if new API doesn't work as expected
-                        logging.info("Falling back to stop/start method for amperage change")
-                        current_charging_session.stop()
-                        current_charging_session = None
-                        client.set_amperage_limit(charger_id, target_amps)
-                        current_charging_session = client.start_charging_session(charger_id)
-                        if current_charging_session:
-                            logging.info(f"Restarted charging session: {current_charging_session.session_id}")
-                        confirmed_amperage = target_amps
-                        
+                    logging.info(f"Setting amperage limit during active session {current_charging_session.session_id}")
+                    await client.set_amperage_limit(charger_id, target_amps)
+                    logging.info(f"Amperage limit set to {target_amps}A during active session")
+                    confirmed_amperage = target_amps
                 except Exception as e:
-                    logging.warning(f"Failed to use new amperage limit API: {e}")
+                    logging.warning(f"Failed to set amperage limit during active session: {e}")
                     logging.info("Falling back to stop/start method for amperage change")
-                    current_charging_session.stop()
+                    await current_charging_session.stop()
                     current_charging_session = None
-                    client.set_amperage_limit(charger_id, target_amps)
-                    current_charging_session = client.start_charging_session(charger_id)
+                    await client.set_amperage_limit(charger_id, target_amps)
+                    current_charging_session = await client.start_charging_session(charger_id)
                     if current_charging_session:
                         logging.info(f"Restarted charging session: {current_charging_session.session_id}")
                     confirmed_amperage = target_amps
@@ -497,14 +513,14 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
                 if was_charging and current_charging_session is None:
                     logging.warning("Expected active session to stop, but session object was None.")
 
-                client.set_amperage_limit(charger_id, target_amps)
+                await client.set_amperage_limit(charger_id, target_amps)
                 logging.info(f"Amperage set command sent for {target_amps}A.")
                 # set_amperage_limit throws an exception if it fails to set the amperage
-                #so we can assume at this point that the amperage was set correctly
+                # so we can assume at this point that the amperage was set correctly
                 confirmed_amperage = target_amps
 
                 if was_charging:
-                    current_charging_session = client.start_charging_session(charger_id)
+                    current_charging_session = await client.start_charging_session(charger_id)
                     if current_charging_session:
                         logging.info(f"Restarted charging session: {current_charging_session.session_id}")
                     else:
@@ -515,8 +531,8 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
 
         # Check if we should attempt to start charging
         should_start_charging = (
-            get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot) == 0
-            and charger_status.plugged_in
+            await get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot) == 0
+            and charger_status.is_plugged_in
         )
         
         # Additional checks to prevent starting charging when vehicle is fully charged or not charging
@@ -527,7 +543,7 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
                 should_start_charging = False
         
         if should_start_charging:
-            current_charging_session = client.start_charging_session(charger_id)
+            current_charging_session = await client.start_charging_session(charger_id)
             if current_charging_session:
                 logging.info(f"Started charging session: {current_charging_session.session_id}")
             else:
@@ -539,7 +555,7 @@ def apply_charging_decision(client, charger_id, charger_status, target_amps, min
 
 # --- MAIN ---
 
-def main():
+async def main():
     global current_charging_session
 
     args = parse_args()
@@ -562,20 +578,39 @@ def main():
     logging.info(f"Using {control_interval}-min control interval and {slope_window}-min slope calculation window")
 
     logging.info("Connecting to ChargePoint...")
-    client = ChargePoint(username, password)
-    chargers = client.get_home_chargers()
+    client = None
+    if not args.no_token_cache:
+        cached_token = _load_cached_token(username)
+        if cached_token:
+            try:
+                client = await ChargePoint.create(username, coulomb_token=cached_token)
+                logging.info("Resumed ChargePoint session from cached token.")
+            except Exception as e:
+                logging.warning(f"Cached token invalid ({e}); re-authenticating.")
+                _clear_cached_token(username)
+                client = None
+
+    if client is None:
+        client = await ChargePoint.create(username)
+        await client.login_with_password(password)
+        if not args.no_token_cache:
+            _save_cached_token(username, client.coulomb_token)
+            logging.info("Logged in and cached new session token.")
+
+    chargers = await client.get_home_chargers()
 
     if not chargers:
         logging.error("No home chargers found.")
+        await client.close()
         sys.exit(1)
 
     charger_id = chargers[0]
     logging.info(f"Found charger {charger_id}")
 
     # Check for existing charging session and initialize global object if active
-    initialize_charging_session_if_active(client, charger_id)
+    await initialize_charging_session_if_active(client, charger_id)
 
-    charger_status = client.get_home_charger_status_v2(charger_id)
+    charger_status = await client.get_home_charger_status(charger_id)
     allowed_amps = charger_status.possible_amperage_limits
     min_amperage = min(allowed_amps)
     minimum_watts_required = (min_amperage - 0.5) * 240
@@ -592,190 +627,205 @@ def main():
     external_stop_recovery = False
     external_stop_time = None
 
-    while True:
-        try:
-            solar = get_solar_power_status(influx_client, control_interval, slope_window)
-            if not solar:
-                logging.warning("No solar data. Skipping...")
-                time.sleep(control_interval * 60)
-                continue
-
-            production = solar["production_watts"]
-            consumption = solar["consumption_watts"]
-            solar_slope = solar["solar_slope_watts_per_second"]
-
-            charger_status = client.get_home_charger_status_v2(charger_id)
-            # Fast-path guard: if unplugged, clear any cached session to prevent stale watts
+    try:
+        while True:
             try:
-                if hasattr(charger_status, "plugged_in") and (not charger_status.plugged_in) and current_charging_session is not None:
-                    logging.info("Charger reports unplugged; clearing cached charging session.")
-                    current_charging_session = None
-                    # Also ensure we don't carry forward a non-zero last-known value when unplugged
-                    global last_known_charging_watts
-                    last_known_charging_watts = 0
-            except Exception:
-                pass
-                
-            user_charging_status = client.get_user_charging_status()
-            session_snapshot = None
-            if user_charging_status is not None:
+                solar = get_solar_power_status(influx_client, control_interval, slope_window)
+                if not solar:
+                    logging.warning("No solar data. Skipping...")
+                    await asyncio.sleep(control_interval * 60)
+                    continue
+
+                production = solar["production_watts"]
+                consumption = solar["consumption_watts"]
+                solar_slope = solar["solar_slope_watts_per_second"]
+
+                charger_status = await client.get_home_charger_status(charger_id)
+                # Fast-path guard: if unplugged, clear any cached session to prevent stale watts
                 try:
-                    session_snapshot = client.get_charging_session(user_charging_status.session_id)
-                except Exception as e:
-                    logging.warning(f"Failed to fetch session snapshot: {e}")
-            current_charging_watts = get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot)
+                    if hasattr(charger_status, "is_plugged_in") and (not charger_status.is_plugged_in) and current_charging_session is not None:
+                        logging.info("Charger reports unplugged; clearing cached charging session.")
+                        current_charging_session = None
+                        # Also ensure we don't carry forward a non-zero last-known value when unplugged
+                        global last_known_charging_watts
+                        last_known_charging_watts = 0
+                except Exception:
+                    pass
 
-            # Detect charging transitions and adjust control interval accordingly
-            correct_for_lag = False
-            if prev_charging_watts > 0 and current_charging_watts == 0:
-                # Car stopped. If previous target wanted charging, this was an external stop.
-                if prev_target_amps > 0:
-                    external_stop_recovery = True
-                    external_stop_time = time.time()
-                    logging.info("Car externally stopped while charging was desired; checking every minute for restart.")
-            elif current_charging_watts > 0:
-                if external_stop_recovery:
+                user_charging_status = await client.get_user_charging_status()
+                session_snapshot = None
+                if user_charging_status is not None:
+                    try:
+                        session_snapshot = await client.get_charging_session(user_charging_status.session_id)
+                    except Exception as e:
+                        logging.warning(f"Failed to fetch session snapshot: {e}")
+                current_charging_watts = await get_current_charging_watts(client, charger_id, charger_status, user_charging_status, session_snapshot)
+
+                # Detect charging transitions and adjust control interval accordingly
+                correct_for_lag = False
+                if prev_charging_watts > 0 and current_charging_watts == 0:
+                    # Car stopped. If previous target wanted charging, this was an external stop.
+                    if prev_target_amps > 0:
+                        external_stop_recovery = True
+                        external_stop_time = time.time()
+                        logging.info("Car externally stopped while charging was desired; checking every minute for restart.")
+                elif current_charging_watts > 0:
+                    if external_stop_recovery:
+                        external_stop_recovery = False
+                        logging.info("Car restarted after external stop; returning to normal control interval.")
+                    elif prev_charging_watts == 0:
+                        # Genuine new session: fire an immediate adjustment but correct for the
+                        # net_p lag. The 5-min average still reflects the no-car period, so using
+                        # current_charging_watts in the excess formula double-counts the car load.
+                        # Using 0 gives: average_excess = -net_p_avg = solar - house_non_car.
+                        logging.info("Car detected as newly charging; bypassing control interval for immediate adjustment.")
+                        last_control_change = 0
+                        correct_for_lag = True
+
+                # Stop the bypass after 10 minutes to avoid excessive API calls if car stays stopped
+                if external_stop_recovery and external_stop_time and (time.time() - external_stop_time) > 600:
                     external_stop_recovery = False
-                    logging.info("Car restarted after external stop; returning to normal control interval.")
-                elif prev_charging_watts == 0:
-                    # Genuine new session: fire an immediate adjustment but correct for the
-                    # net_p lag. The 5-min average still reflects the no-car period, so using
-                    # current_charging_watts in the excess formula double-counts the car load.
-                    # Using 0 gives: average_excess = -net_p_avg = solar - house_non_car.
-                    logging.info("Car detected as newly charging; bypassing control interval for immediate adjustment.")
-                    last_control_change = 0
-                    correct_for_lag = True
+                    logging.info("Car has been stopped for >10 minutes; resuming normal control interval.")
 
-            # Stop the bypass after 10 minutes to avoid excessive API calls if car stays stopped
-            if external_stop_recovery and external_stop_time and (time.time() - external_stop_time) > 600:
-                external_stop_recovery = False
-                logging.info("Car has been stopped for >10 minutes; resuming normal control interval.")
+                prev_charging_watts = current_charging_watts
 
-            prev_charging_watts = current_charging_watts
+                # When the net_p average is lagged (car just started), use 0 for the car's
+                # contribution so the excess reflects real solar surplus minus house load only.
+                excess_charging_watts = 0 if correct_for_lag else current_charging_watts
+                average_excess = -1 * (consumption - excess_charging_watts)
+                predicted_excess = average_excess + (solar_slope * control_interval * 60)
+                if correct_for_lag:
+                    logging.info(f"Correcting excess for net_p lag (new session): using 0W car load for excess calculation.")
 
-            # When the net_p average is lagged (car just started), use 0 for the car's
-            # contribution so the excess reflects real solar surplus minus house load only.
-            excess_charging_watts = 0 if correct_for_lag else current_charging_watts
-            average_excess = -1 * (consumption - excess_charging_watts)
-            predicted_excess = average_excess + (solar_slope * control_interval * 60)
-            if correct_for_lag:
-                logging.info(f"Correcting excess for net_p lag (new session): using 0W car load for excess calculation.")
+                # Log charging status debug info periodically
+                if user_charging_status is not None:
+                    await log_charging_status_debug(client, user_charging_status, charger_status, session_snapshot)
 
-            # Log charging status debug info periodically
-            if user_charging_status is not None:
-                log_charging_status_debug(client, user_charging_status, charger_status, session_snapshot)
+                logging.info(f"{control_interval}-min averages - Production: {production:.1f}W, Grid Consumption: {consumption:.1f}W, Current Charging Load: {current_charging_watts:.1f}W, Average Excess: {average_excess:.1f}W, Solar Slope: {solar_slope:.3f}W/s, Predicted Excess: {predicted_excess:.1f}W")
 
-            logging.info(f"{control_interval}-min averages - Production: {production:.1f}W, Grid Consumption: {consumption:.1f}W, Current Charging Load: {current_charging_watts:.1f}W, Average Excess: {average_excess:.1f}W, Solar Slope: {solar_slope:.3f}W/s, Predicted Excess: {predicted_excess:.1f}W")
+                allowed_amps = charger_status.possible_amperage_limits
+                charging_status_val = charger_status.charging_status
 
-            allowed_amps = charger_status.possible_amperage_limits
-            charging_status_val = charger_status.charging_status
+                # Only log debug info if allowed_amps is not a list (indicating a problem)
+                if not isinstance(allowed_amps, (list, tuple)):
+                    logging.error(f"allowed_amps is not a list: {type(allowed_amps)} = {allowed_amps}. Skipping charging decision.")
+                    # Log additional debug info only when there's a problem
+                    logging.error(f"DEBUG: charger_status type={type(charger_status)}")
+                    logging.error(f"DEBUG: charger_status attributes={dir(charger_status)}")
+                    if hasattr(charger_status, 'charging_status'):
+                        logging.error(f"DEBUG: charger_status.charging_status={charger_status.charging_status}")
+                    if hasattr(charger_status, 'is_plugged_in'):
+                        logging.error(f"DEBUG: charger_status.is_plugged_in={charger_status.is_plugged_in}")
+                    await asyncio.sleep(60)
+                    continue
 
-            # Only log debug info if allowed_amps is not a list (indicating a problem)
-            if not isinstance(allowed_amps, (list, tuple)):
-                logging.error(f"allowed_amps is not a list: {type(allowed_amps)} = {allowed_amps}. Skipping charging decision.")
-                # Log additional debug info only when there's a problem
-                logging.error(f"DEBUG: charger_status type={type(charger_status)}")
-                logging.error(f"DEBUG: charger_status attributes={dir(charger_status)}")
-                if hasattr(charger_status, 'charging_status'):
-                    logging.error(f"DEBUG: charger_status.charging_status={charger_status.charging_status}")
-                if hasattr(charger_status, 'plugged_in'):
-                    logging.error(f"DEBUG: charger_status.plugged_in={charger_status.plugged_in}")
-                time.sleep(60)
-                continue
-
-            tou_period = get_tou_period()
-            tou_threshold = get_tou_excess_threshold(
-                minimum_watts_required, tou_period,
-            )
-            # Override multiplier/tolerance from CLI args
-            if tou_period == 'peak':
-                tou_threshold = minimum_watts_required * peak_excess_multiplier
-            elif tou_period == 'off_peak':
-                tou_threshold = -1.0 * offpeak_grid_tolerance
-            logging.info(f"TOU period: {tou_period}, excess threshold: {tou_threshold:.0f}W (base: {minimum_watts_required:.0f}W)")
-
-            if production < 500:
-                # After-hours / low-sun: respect TOU to decide whether to charge
+                tou_period = get_tou_period()
+                tou_threshold = get_tou_excess_threshold(
+                    minimum_watts_required, tou_period,
+                )
+                # Override multiplier/tolerance from CLI args
                 if tou_period == 'peak':
-                    target_amps = 0
-                    logging.info(f"Low production ({production:.1f}W) during Peak hours; stopping to avoid peak rates.")
-                else:
-                    # Off-peak or part-peak: only charge at max when schedule state is explicitly true.
-                    # Treat unknown schedule state (None/missing) as not allowed to avoid accidental pre-sunrise charging.
-                    is_off_peak = getattr(charger_status, "is_during_scheduled_time", None)
-                    if is_no_overnight_charging_month(no_overnight_months):
+                    tou_threshold = minimum_watts_required * peak_excess_multiplier
+                elif tou_period == 'off_peak':
+                    tou_threshold = -1.0 * offpeak_grid_tolerance
+                logging.info(f"TOU period: {tou_period}, excess threshold: {tou_threshold:.0f}W (base: {minimum_watts_required:.0f}W)")
+
+                if production < 500:
+                    # After-hours / low-sun: respect TOU to decide whether to charge
+                    if tou_period == 'peak':
+                        target_amps = 0
+                        logging.info(f"Low production ({production:.1f}W) during Peak hours; stopping to avoid peak rates.")
+                    else:
+                        # Off-peak or part-peak: only charge at max when schedule state is explicitly true.
+                        # Treat unknown schedule state (None/missing) as not allowed to avoid accidental pre-sunrise charging.
+                        is_off_peak = getattr(charger_status, "is_during_scheduled_time", None)
+                        if is_no_overnight_charging_month(no_overnight_months):
+                            target_amps = 0
+                            logging.info(
+                                f"Low production ({production:.1f}W), {tou_period}; overnight charging disabled "
+                                f"(month {datetime.now(_PACIFIC).month} is in no-overnight months)."
+                            )
+                        elif is_off_peak is True:
+                            target_amps = max(allowed_amps)
+                            logging.info(f"Low production ({production:.1f}W), {tou_period}; charging at max {target_amps}A.")
+                        else:
+                            target_amps = 0
+                            logging.info(
+                                f"Low production ({production:.1f}W), {tou_period}, but schedule window is not confirmed "
+                                f"(is_during_scheduled_time={is_off_peak}); deferring."
+                            )
+                elif predicted_excess >= tou_threshold:
+                    target_amps = determine_target_amperage(predicted_excess, allowed_amps)
+                    # Hysteresis: the tou_threshold governs when to *stop* an active session
+                    # (e.g. off-peak tolerates -500W grid draw to avoid stop/start on brief dips).
+                    # To *start* a new session we always require at least minimum_watts_required
+                    # so that a rising solar slope does not prematurely kick off charging when
+                    # the actual excess is far below the minimum charging rate.
+                    if target_amps > 0 and current_charging_watts == 0 and predicted_excess < minimum_watts_required:
                         target_amps = 0
                         logging.info(
-                            f"Low production ({production:.1f}W), {tou_period}; overnight charging disabled "
-                            f"(month {datetime.now(_PACIFIC).month} is in no-overnight months)."
+                            f"Predicted excess ({predicted_excess:.1f}W) is above {tou_period} stop threshold "
+                            f"({tou_threshold:.0f}W) but below minimum start threshold "
+                            f"({minimum_watts_required:.1f}W); deferring until solar is sufficient."
                         )
-                    elif is_off_peak is True:
-                        target_amps = max(allowed_amps)
-                        logging.info(f"Low production ({production:.1f}W), {tou_period}; charging at max {target_amps}A.")
                     else:
-                        target_amps = 0
-                        logging.info(
-                            f"Low production ({production:.1f}W), {tou_period}, but schedule window is not confirmed "
-                            f"(is_during_scheduled_time={is_off_peak}); deferring."
-                        )
-            elif predicted_excess >= tou_threshold:
-                target_amps = determine_target_amperage(predicted_excess, allowed_amps)
-                # Hysteresis: the tou_threshold governs when to *stop* an active session
-                # (e.g. off-peak tolerates -500W grid draw to avoid stop/start on brief dips).
-                # To *start* a new session we always require at least minimum_watts_required
-                # so that a rising solar slope does not prematurely kick off charging when
-                # the actual excess is far below the minimum charging rate.
-                if target_amps > 0 and current_charging_watts == 0 and predicted_excess < minimum_watts_required:
+                        logging.info(f"Excess solar ({predicted_excess:.1f}W) >= {tou_period} threshold ({tou_threshold:.0f}W). Setting {target_amps}A.")
+                else:
                     target_amps = 0
-                    logging.info(
-                        f"Predicted excess ({predicted_excess:.1f}W) is above {tou_period} stop threshold "
-                        f"({tou_threshold:.0f}W) but below minimum start threshold "
-                        f"({minimum_watts_required:.1f}W); deferring until solar is sufficient."
-                    )
-                else:
-                    logging.info(f"Excess solar ({predicted_excess:.1f}W) >= {tou_period} threshold ({tou_threshold:.0f}W). Setting {target_amps}A.")
-            else:
-                target_amps = 0
-                logging.info(f"Excess solar ({predicted_excess:.1f}W) below {tou_period} threshold ({tou_threshold:.0f}W). Stopping charging.")
-                
-            if ((time.time() - last_control_change) > (control_interval * 60)) or external_stop_recovery:
-                current_amperage = charger_status.amperage_limit
-                if charging_status_val == "CHARGING" and current_amperage == 40 and last_set_amperage != 40:
-                    logging.info("User likely set charger to 40A manually. Skipping adjustment.")
-                else:
-                    session_for_wait_check = session_snapshot if session_snapshot is not None else current_charging_session
-                    if session_for_wait_check and getattr(session_for_wait_check, "charging_state", None) == "waiting":
-                        logging.info("Car is waiting to start charging. Skipping adjustment.")
+                    logging.info(f"Excess solar ({predicted_excess:.1f}W) below {tou_period} threshold ({tou_threshold:.0f}W). Stopping charging.")
+
+                if ((time.time() - last_control_change) > (control_interval * 60)) or external_stop_recovery:
+                    current_amperage = charger_status.amperage_limit
+                    if charging_status_val == "CHARGING" and current_amperage == 40 and last_set_amperage != 40:
+                        logging.info("User likely set charger to 40A manually. Skipping adjustment.")
                     else:
-                        logging.info("=== Executing Adjustment ===")
-                        try:
-                            new_amperage = apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage, user_charging_status, session_snapshot)
-                            last_set_amperage = new_amperage
-                            last_control_change = time.time()
-                        except ChargePointCommunicationException as e:
-                            logging.error(f"Failed to apply charging decision, clearing global session: {e.message}")
-                            current_charging_session = None
-                        logging.info("=== === === === === === ===")
+                        session_for_wait_check = session_snapshot if session_snapshot is not None else current_charging_session
+                        if session_for_wait_check and getattr(session_for_wait_check, "charging_state", None) == "waiting":
+                            logging.info("Car is waiting to start charging. Skipping adjustment.")
+                        else:
+                            logging.info("=== Executing Adjustment ===")
+                            try:
+                                new_amperage = await apply_charging_decision(client, charger_id, charger_status, target_amps, min_amperage, user_charging_status, session_snapshot)
+                                last_set_amperage = new_amperage
+                                last_control_change = time.time()
+                            except CommunicationError as e:
+                                logging.error(f"Failed to apply charging decision, clearing global session: {e.message}")
+                                current_charging_session = None
+                            logging.info("=== === === === === === ===")
 
-            # Remove redundant fetch; use charger_status already obtained above
-            current_amperage = last_set_amperage if last_set_amperage is not None else charger_status.amperage_limit
-            
-            # Update and log the current_charging_watts
-            log_control_metrics_to_influx(
-                influx_client,
-                solar_slope,
-                predicted_excess,
-                current_charging_watts,
-                target_amps,
-                current_amperage
-            )
+                # Remove redundant fetch; use charger_status already obtained above
+                current_amperage = last_set_amperage if last_set_amperage is not None else charger_status.amperage_limit
 
-            prev_target_amps = target_amps
-            time.sleep(60)
+                # Update and log the current_charging_watts
+                log_control_metrics_to_influx(
+                    influx_client,
+                    solar_slope,
+                    predicted_excess,
+                    current_charging_watts,
+                    target_amps,
+                    current_amperage
+                )
 
-        except Exception as e:
-            logging.error(f"Error in main loop: {e}")
-            time.sleep(control_interval * 60)
+                prev_target_amps = target_amps
+                await asyncio.sleep(60)
+
+            except InvalidSession as e:
+                logging.warning(f"Session expired mid-run ({e.message}); clearing cache and re-authenticating.")
+                _clear_cached_token(username)
+                try:
+                    client = await ChargePoint.create(username)
+                    await client.login_with_password(password)
+                    if not args.no_token_cache:
+                        _save_cached_token(username, client.coulomb_token)
+                    logging.info("Re-authenticated successfully.")
+                except Exception as auth_e:
+                    logging.error(f"Re-authentication failed: {auth_e}")
+                    await asyncio.sleep(control_interval * 60)
+            except Exception as e:
+                logging.error(f"Error in main loop: {e}")
+                await asyncio.sleep(control_interval * 60)
+    finally:
+        await client.close()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

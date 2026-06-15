@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 import pytz
 from python_chargepoint import ChargePoint
-from python_chargepoint.exceptions import CommunicationError, InvalidSession
+from python_chargepoint.exceptions import CommunicationError, InvalidSession, DatadomeCaptcha
 from influxdb import InfluxDBClient
 
 # --- TOKEN CACHE ---
@@ -828,6 +828,12 @@ async def main():
             except Exception as e:
                 logging.error(f"Error in main loop: {e}")
                 await asyncio.sleep(control_interval * 60)
+    except DatadomeCaptcha:
+        logging.error(
+            "Login blocked by Datadome captcha. Run the script on a different machine "
+            "to populate the token cache, then copy ~/.chargepoint/token_*.json to this host."
+        )
+        raise
     except Exception as e:
         logging.error("Fatal error during startup or main loop", exc_info=True)
         raise

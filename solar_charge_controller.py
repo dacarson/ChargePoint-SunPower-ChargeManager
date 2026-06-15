@@ -96,8 +96,8 @@ def parse_args():
     # InfluxDB 1.x parameters
     parser.add_argument("--influxdb-host", default="localhost", help="InfluxDB host (default: localhost)")
     parser.add_argument("--influxdb-port", type=int, default=8086, help="InfluxDB port (default: 8086)")
-    parser.add_argument("--influxdb-user", required=True, help="InfluxDB username")
-    parser.add_argument("--influxdb-pass", required=True, help="InfluxDB password")
+    parser.add_argument("--influxdb-user", default=None, help="InfluxDB username (default: none)")
+    parser.add_argument("--influxdb-pass", default=None, help="InfluxDB password (default: none)")
     parser.add_argument("--influxdb-db", default="pvs6", help="InfluxDB database name (default: pvs6)")
 
     # Control loop options

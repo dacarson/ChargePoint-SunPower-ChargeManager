@@ -112,8 +112,8 @@ python solar_charge_controller.py \
 | `--password` | ✅ | ChargePoint account password |
 | `--influxdb-host` | ❌ | (default: localhost) InfluxDB host |
 | `--influxdb-port` | ❌ | (default: 8086) InfluxDB port |
-| `--influxdb-user` | ✅ | InfluxDB username |
-| `--influxdb-pass` | ✅ | InfluxDB password |
+| `--influxdb-user` | ❌ | InfluxDB username (omit if auth is disabled) |
+| `--influxdb-pass` | ❌ | InfluxDB password (omit if auth is disabled) |
 | `--influxdb-db` | ❌ | (default: pvs6) InfluxDB database name |
 | `--control-interval` | ❌ | (default: 5) Time in minutes between checking solar production and adjusting charging. This should not be too frequent because if the car is charging, it must stop it to change the amperage and restart it. |
 | `--slope-window` | ❌ | (default: 30) Time window in minutes for calculating solar power trends. A longer window provides more stable predictions by smoothing out short-term fluctuations. |

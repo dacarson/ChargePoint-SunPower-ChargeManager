@@ -1,6 +1,10 @@
 # Upstream python-chargepoint library
 python-chargepoint>=2.3.2
 
+# Brotli decompression for aiohttp (ChargePoint API uses br content-encoding).
+# brotlicffi 1.1.0+ is required — older versions have an incompatible process() API.
+brotlicffi>=1.1.0
+
 # InfluxDB client for InfluxDB 1.x
 influxdb>=5.3.1
 

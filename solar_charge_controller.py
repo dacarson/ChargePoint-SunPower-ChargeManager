@@ -828,6 +828,9 @@ async def main():
             except Exception as e:
                 logging.error(f"Error in main loop: {e}")
                 await asyncio.sleep(control_interval * 60)
+    except Exception as e:
+        logging.error("Fatal error during startup or main loop", exc_info=True)
+        raise
     finally:
         if client is not None:
             await client.close()

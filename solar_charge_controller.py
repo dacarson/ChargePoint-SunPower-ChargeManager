@@ -48,6 +48,13 @@ def get_tou_excess_threshold(base_minimum_watts, tou_period):
 
 # --- FUNCTIONS ---
 
+_NO_OVERNIGHT_DEFAULT_MONTHS = list(range(6, 10))  # June–September (sunniest in San Francisco)
+
+def is_no_overnight_charging_month(no_overnight_months):
+    """Return True if the current month is in the no-overnight-charging list."""
+    month = datetime.now(_PACIFIC).month
+    return month in no_overnight_months
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Solar Smart Charge Controller for ChargePoint Home Flex (via InFluxDB).")
 
@@ -75,6 +82,11 @@ def parse_args():
     parser.add_argument("--offpeak-grid-tolerance", type=float, default=500.0,
         help="Watts of grid draw to tolerate during Off Peak before stopping "
              "EV charging (default: 500W). Prevents stop/start on solar dips.")
+    parser.add_argument("--no-overnight-months", type=int, nargs="+",
+        default=_NO_OVERNIGHT_DEFAULT_MONTHS, metavar="MONTH",
+        help="Month numbers (1-12) during which overnight grid charging is disabled "
+             "(default: 6 7 8 9 — June through September, sunniest months in "
+             "San Francisco). Pass an empty list to always allow overnight charging.")
 
     return parser.parse_args()
 
@@ -569,6 +581,7 @@ def main():
     minimum_watts_required = (min_amperage - 0.5) * 240
     peak_excess_multiplier  = args.peak_excess_multiplier
     offpeak_grid_tolerance  = args.offpeak_grid_tolerance
+    no_overnight_months     = set(args.no_overnight_months)
 
     logging.info(f"Minimum amperage is {min_amperage}A, requiring at least {minimum_watts_required}W of solar excess to start charging.")
 
@@ -690,7 +703,13 @@ def main():
                     # Off-peak or part-peak: only charge at max when schedule state is explicitly true.
                     # Treat unknown schedule state (None/missing) as not allowed to avoid accidental pre-sunrise charging.
                     is_off_peak = getattr(charger_status, "is_during_scheduled_time", None)
-                    if is_off_peak is True:
+                    if is_no_overnight_charging_month(no_overnight_months):
+                        target_amps = 0
+                        logging.info(
+                            f"Low production ({production:.1f}W), {tou_period}; overnight charging disabled "
+                            f"(month {datetime.now(_PACIFIC).month} is in no-overnight months)."
+                        )
+                    elif is_off_peak is True:
                         target_amps = max(allowed_amps)
                         logging.info(f"Low production ({production:.1f}W), {tou_period}; charging at max {target_amps}A.")
                     else:

@@ -626,6 +626,12 @@ async def main():
         prev_target_amps = 0
         external_stop_recovery = False
         external_stop_time = None
+        # Amperage the user manually set via the app/vehicle (detected when the
+        # charger's amperage differs from what this script last commanded while
+        # actively charging). Once set, this persists across peak-hour pauses and
+        # the no-overnight-charging restriction, so charging resumes at this rate
+        # as soon as it's no longer Peak. Cleared when the vehicle is unplugged.
+        user_override_amps = None
 
         while True:
             try:
@@ -718,6 +724,27 @@ async def main():
                     await asyncio.sleep(60)
                     continue
 
+                # --- Manual override detection ---
+                # If the vehicle is unplugged, any prior override is moot.
+                # If the charger is actively charging at the max allowed amperage (40A)
+                # and this script didn't just set that itself, the user manually set it
+                # via the app/vehicle. Remember that so peak/overnight pauses resume at
+                # max amperage instead of the solar-computed rate.
+                max_amperage = max(allowed_amps)
+                if not charger_status.is_plugged_in:
+                    if user_override_amps is not None:
+                        logging.info("Charger unplugged; clearing manual amperage override.")
+                    user_override_amps = None
+                elif charging_status_val == "CHARGING":
+                    current_amperage_now = charger_status.amperage_limit
+                    if current_amperage_now == max_amperage and last_set_amperage != max_amperage:
+                        if user_override_amps != max_amperage:
+                            logging.info(
+                                f"Detected manual amperage change to {max_amperage}A; "
+                                f"charging will resume at this rate through peak/overnight pauses."
+                            )
+                        user_override_amps = max_amperage
+
                 tou_period = get_tou_period()
                 tou_threshold = get_tou_excess_threshold(
                     minimum_watts_required, tou_period,
@@ -733,7 +760,16 @@ async def main():
                     # After-hours / low-sun: respect TOU to decide whether to charge
                     if tou_period == 'peak':
                         target_amps = 0
-                        logging.info(f"Low production ({production:.1f}W) during Peak hours; stopping to avoid peak rates.")
+                        if user_override_amps is not None:
+                            logging.info(f"Manual override active ({user_override_amps}A) but Peak hours; pausing until off-peak.")
+                        else:
+                            logging.info(f"Low production ({production:.1f}W) during Peak hours; stopping to avoid peak rates.")
+                    elif user_override_amps is not None:
+                        # User manually set max amperage; honor it regardless of the
+                        # no-overnight-charging month or schedule confirmation, and
+                        # resume automatically once Peak ends.
+                        target_amps = user_override_amps
+                        logging.info(f"Manual override active; charging at user-set {user_override_amps}A ({tou_period}).")
                     else:
                         # Off-peak or part-peak: only charge at max when schedule state is explicitly true.
                         # Treat unknown schedule state (None/missing) as not allowed to avoid accidental pre-sunrise charging.

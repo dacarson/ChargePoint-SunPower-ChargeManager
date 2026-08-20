@@ -7,4 +7,4 @@
 # solar_charge_controller is actually deployed with (see /etc/default/solar_charge_controller)
 # for a fair comparison.
 
-CMDARGS="--influxdb-user $INFLUX_USER --influxdb-pass $INFLUX_PASS --log-file /home/pi/ChargePoint-SunPower-ChargeManager/model_shadow_logger.log --quiet"
+CMDARGS="--log-file /home/pi/ChargePoint-SunPower-ChargeManager/model_shadow_logger.log --quiet"

@@ -199,9 +199,9 @@ The configuration files in `/etc/default/` allow you to set command-line argumen
 
 - `/etc/default/model_shadow_logger`:
   ```bash
-  CMDARGS="--influxdb-user $INFLUX_USER --influxdb-pass $INFLUX_PASS --log-file /home/pi/ChargePoint-SunPower-ChargeManager/model_shadow_logger.log --quiet"
+  CMDARGS="--log-file /home/pi/ChargePoint-SunPower-ChargeManager/model_shadow_logger.log --quiet"
   ```
-  Read-only: no ChargePoint credentials needed. `--peak-excess-multiplier`/`--offpeak-grid-tolerance` should match whatever `solar_charge_controller` is actually deployed with, for a fair comparison.
+  Read-only: no ChargePoint credentials needed, and no InfluxDB credentials either (InfluxDB auth is disabled on this deployment). `--peak-excess-multiplier`/`--offpeak-grid-tolerance` should match whatever `solar_charge_controller` is actually deployed with, for a fair comparison.
 
 You can add or modify arguments in these files to customize the behavior of each service. After making changes, restart the services for them to take effect.
 

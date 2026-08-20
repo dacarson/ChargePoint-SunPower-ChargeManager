@@ -12,7 +12,13 @@ influxdb>=5.3.1
 websocket-client>=1.6.0
 
 # Used by model_shadow_logger.py (not needed by solar_charge_controller.py or pvs6_ws_logger.py)
-scikit-learn>=1.7.0
+# scikit-learn is pinned EXACTLY, not >=: pickled sklearn models (model_run4.joblib) are only
+# guaranteed loadable by the exact version that saved them (this is a documented sklearn
+# limitation, not a bug here) — a looser pin let pip install a newer scikit-learn on the Pi
+# whose internal HistGradientBoostingRegressor loss-function module layout had changed,
+# breaking unpickling with "ModuleNotFoundError: No module named '_loss'". If model_run4.joblib
+# is ever retrained, re-pin this to whatever version trained the new file.
+scikit-learn==1.7.0
 joblib>=1.5.1
 pandas>=2.0
 numpy>=1.24

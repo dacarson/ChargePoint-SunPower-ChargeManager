@@ -1,0 +1,10 @@
+#-----------------------------------------------------------------------------
+# /etc/default/model_shadow_logger - config options for the SolarChargeML shadow logger
+#-----------------------------------------------------------------------------
+
+# Read-only: queries InfluxDB on localhost, never calls the ChargePoint API, never sets an
+# amperage. --peak-excess-multiplier / --offpeak-grid-tolerance should match whatever
+# solar_charge_controller is actually deployed with (see /etc/default/solar_charge_controller)
+# for a fair comparison.
+
+CMDARGS="--influxdb-user $INFLUX_USER --influxdb-pass $INFLUX_PASS --log-file /home/pi/ChargePoint-SunPower-ChargeManager/model_shadow_logger.log --quiet"

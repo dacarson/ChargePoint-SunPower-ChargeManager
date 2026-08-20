@@ -125,7 +125,7 @@ Session tokens are cached at `~/.chargepoint/token_<hash>.json` to avoid a full 
 
 ## Systemd Service Installation
 
-Both components can be installed as systemd services for automatic startup and management. The repository includes example service files in the `etc/systemd/system/` directory and corresponding configuration files in `etc/default/`.
+All three components can be installed as systemd services for automatic startup and management. The repository includes example service files in the `etc/systemd/system/` directory and corresponding configuration files in `etc/default/`. `model_shadow_logger.py` (see [MODEL_RUN4_README.md](MODEL_RUN4_README.md)) is optional — it's a read-only live validator for a candidate ML replacement for the charge-decision logic, and never controls charging.
 
 ### Installation Steps
 
@@ -133,26 +133,31 @@ Both components can be installed as systemd services for automatic startup and m
    ```bash
    sudo cp etc/systemd/system/pvs6_ws_logger.service /etc/systemd/system/
    sudo cp etc/systemd/system/solar_charge_controller.service /etc/systemd/system/
+   sudo cp etc/systemd/system/model_shadow_logger.service /etc/systemd/system/
    ```
 
 2. Copy the default configuration files:
    ```bash
    sudo cp etc/default/pvs6_ws_logger /etc/default/
    sudo cp etc/default/solar_charge_controller /etc/default/
+   sudo cp etc/default/model_shadow_logger /etc/default/
    ```
 
 3. Edit the configuration files to set your credentials:
    ```bash
    sudo nano /etc/default/pvs6_ws_logger
    sudo nano /etc/default/solar_charge_controller
+   sudo nano /etc/default/model_shadow_logger
    ```
 
 4. Enable and start the services:
    ```bash
    sudo systemctl enable pvs6_ws_logger
    sudo systemctl enable solar_charge_controller
+   sudo systemctl enable model_shadow_logger
    sudo systemctl start pvs6_ws_logger
    sudo systemctl start solar_charge_controller
+   sudo systemctl start model_shadow_logger
    ```
 
 ### Service Management
@@ -161,18 +166,21 @@ Both components can be installed as systemd services for automatic startup and m
   ```bash
   sudo systemctl status pvs6_ws_logger
   sudo systemctl status solar_charge_controller
+  sudo systemctl status model_shadow_logger
   ```
 
 - View service logs:
   ```bash
   sudo journalctl -u pvs6_ws_logger -f
   sudo journalctl -u solar_charge_controller -f
+  sudo journalctl -u model_shadow_logger -f
   ```
 
 - Restart services:
   ```bash
   sudo systemctl restart pvs6_ws_logger
   sudo systemctl restart solar_charge_controller
+  sudo systemctl restart model_shadow_logger
   ```
 
 ### Configuration Files
@@ -188,6 +196,12 @@ The configuration files in `/etc/default/` allow you to set command-line argumen
   ```bash
   CMDARGS="--influxdb-user $INFLUX_USER --influxdb-pass $INFLUX_PASS --username $CHARGEPOINT_USERNAME --password $CHARGEPOINT_PASS --log-file /home/pi/ChargePoint-SunPower-ChargeManager/solar_charge_controller.log --quiet"
   ```
+
+- `/etc/default/model_shadow_logger`:
+  ```bash
+  CMDARGS="--influxdb-user $INFLUX_USER --influxdb-pass $INFLUX_PASS --log-file /home/pi/ChargePoint-SunPower-ChargeManager/model_shadow_logger.log --quiet"
+  ```
+  Read-only: no ChargePoint credentials needed. `--peak-excess-multiplier`/`--offpeak-grid-tolerance` should match whatever `solar_charge_controller` is actually deployed with, for a fair comparison.
 
 You can add or modify arguments in these files to customize the behavior of each service. After making changes, restart the services for them to take effect.
 

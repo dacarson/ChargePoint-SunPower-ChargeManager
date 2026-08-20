@@ -10,3 +10,9 @@ influxdb>=5.3.1
 
 # WebSocket client — used by pvs6_ws_logger.py (not needed by solar_charge_controller.py)
 websocket-client>=1.6.0
+
+# Used by model_shadow_logger.py (not needed by solar_charge_controller.py or pvs6_ws_logger.py)
+scikit-learn>=1.7.0
+joblib>=1.5.1
+pandas>=2.0
+numpy>=1.24

@@ -1,0 +1,15 @@
+[Unit]
+Description=SolarChargeML shadow-mode live validator (read-only, no charging control)
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/ChargePoint-SunPower-ChargeManager
+EnvironmentFile=/etc/default/model_shadow_logger
+ExecStart=/home/pi/ChargePoint-SunPower-ChargeManager/venv/bin/python model_shadow_logger.py $CMDARGS
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,7 @@
 """
-Shadow-mode live validator for the SolarChargeML model (model_run4.joblib).
+Shadow-mode live validator for the SolarChargeML model (currently model_run5.joblib; see
+MODEL_RUN5_README.md — model_run4.joblib was the default through 2026-09-06, superseded after
+its own live shadow data showed watts-MAE gains weren't translating into amp/dollar gains).
 
 Runs alongside solar_charge_controller.py, read-only: queries InfluxDB for the same live
 state the real controller sees, computes what the model would predict/set, and logs it next
@@ -8,9 +10,11 @@ never calls the ChargePoint API and never sets an amperage — no ability to aff
 charging behavior.
 
 Feature engineering here must stay in sync with WeatherML's
-workspace/SolarChargeML/train_run4.py (which trained model_run4.joblib) and
-workspace/SolarChargeML/export_and_join.py (which built its training data). See
-MODEL_RUN4_README.md for the full methodology and feature list.
+workspace/SolarChargeML/feature_engineering.py (shared by all Run 5+ training scripts; Run 4
+used its own now-historical copy in train_run4.py) and
+workspace/SolarChargeML/export_and_join.py (which builds the training data). The feature list
+and joblib bundle shape are unchanged from Run 4, so no engineering changes were needed for
+this model swap — see MODEL_RUN5_README.md for the full methodology and feature list.
 """
 import sys
 import time
@@ -67,9 +71,11 @@ def parse_args():
                          help="Database with sunpower_power / solar_charge_control (default: pvs6)")
     parser.add_argument("--weather-db", default="weather",
                          help="Database with wf/obs_st (default: weather)")
-    parser.add_argument("--model-path", default="model_run4.joblib",
+    parser.add_argument("--model-path", default="model_run5.joblib",
                          help="Path to the joblib model bundle, relative to this script's directory "
-                              "unless absolute (default: model_run4.joblib)")
+                              "unless absolute (default: model_run5.joblib; model_run4.joblib was "
+                              "the default through 2026-09-06 — see MODEL_RUN5_README.md for why "
+                              "it was superseded, and MODEL_RUN4_README.md for the prior model)")
     parser.add_argument("--check-interval", type=int, default=60,
                          help="Seconds between shadow predictions (default: 60)")
     parser.add_argument("--peak-excess-multiplier", type=float, default=2.0,

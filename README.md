@@ -125,7 +125,7 @@ Session tokens are cached at `~/.chargepoint/token_<hash>.json` to avoid a full 
 
 ## Systemd Service Installation
 
-All three components can be installed as systemd services for automatic startup and management. The repository includes example service files in the `etc/systemd/system/` directory and corresponding configuration files in `etc/default/`. `model_shadow_logger.py` (see [MODEL_RUN4_README.md](MODEL_RUN4_README.md)) is optional — it's a read-only live validator for a candidate ML replacement for the charge-decision logic, and never controls charging.
+All three components can be installed as systemd services for automatic startup and management. The repository includes example service files in the `etc/systemd/system/` directory and corresponding configuration files in `etc/default/`. `model_shadow_logger.py` (see [MODEL_RUN5_README.md](MODEL_RUN5_README.md)) is optional — it's a read-only live validator for a candidate ML replacement for the charge-decision logic, and never controls charging.
 
 ### Installation Steps
 

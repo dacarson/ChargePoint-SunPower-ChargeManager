@@ -1,5 +1,11 @@
 # model_run4.joblib — SolarChargeML excess-solar predictor
 
+> **Superseded 2026-09-06 by `model_run5.joblib` — see [MODEL_RUN5_README.md](MODEL_RUN5_README.md).**
+> This model's own live shadow data (2026-08-20 → 2026-09-06) showed its watts-MAE improvement
+> over the heuristic wasn't translating into meaningfully better amp decisions or dollars — the
+> investigation that produced `model_run5.joblib`. Kept here for reference/rollback; the rest of
+> this document describes `model_run4.joblib` as it was evaluated at the time.
+
 Trained model for predicting excess solar power 5 minutes ahead, as a candidate replacement for
 `solar_charge_controller.py`'s `predicted_excess` step (the average+slope heuristic in
 `get_solar_power_status()`/`main()`). **Currently shadow-mode only** — `model_shadow_logger.py`

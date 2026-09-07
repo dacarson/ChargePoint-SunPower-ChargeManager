@@ -9,12 +9,13 @@ to the real controller's own logged prediction/amperage for direct comparison in
 never calls the ChargePoint API and never sets an amperage — no ability to affect real
 charging behavior.
 
-Feature engineering here must stay in sync with WeatherML's
-workspace/SolarChargeML/feature_engineering.py (shared by all Run 5+ training scripts; Run 4
-used its own now-historical copy in train_run4.py) and
-workspace/SolarChargeML/export_and_join.py (which builds the training data). The feature list
-and joblib bundle shape are unchanged from Run 4, so no engineering changes were needed for
-this model swap — see MODEL_RUN5_README.md for the full methodology and feature list.
+Feature engineering here uses feature_engineering.py's add_derived_features(), vendored
+verbatim from WeatherML's workspace/SolarChargeML/feature_engineering.py (copied, not
+cross-repo imported — the two repos are otherwise independent). If that file changes upstream
+(new features, a different bin width, etc.), re-copy it into this repo; nothing in this script
+should hand-duplicate its logic. The feature list and joblib bundle shape are unchanged from
+Run 4, so no engineering changes were needed for the Run 5 model swap — see
+MODEL_RUN5_README.md for the full methodology and feature list.
 """
 import sys
 import time
@@ -23,7 +24,6 @@ import argparse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import joblib
 from influxdb import InfluxDBClient
@@ -31,10 +31,9 @@ from influxdb import InfluxDBClient
 from solar_charge_controller import (
     get_tou_period, get_tou_excess_threshold, determine_target_amperage, setup_logging,
 )
+from feature_engineering import BIN_SECONDS, DAYTIME_PV_W, add_derived_features
 
-BIN_SECONDS = 30  # must match train_run4.py's grid
 LOOKBACK_MINUTES = 35  # >= the longest slope window (30min) + buffer for reindex edge effects
-DAYTIME_PV_W = 500.0  # matches solar_charge_controller.py's production < 500W branch cutoff
 
 # Empirically observed 2026-08-19 from historical target_amperage/current_amperage in
 # pvs6.solar_charge_control (SELECT DISTINCT): every integer 8-40A, no gaps. Update if the
@@ -44,10 +43,6 @@ MAX_AMPERAGE = 40
 ALLOWED_AMPS = list(range(MIN_AMPERAGE, MAX_AMPERAGE + 1))
 VOLTAGE = 240
 MINIMUM_WATTS_REQUIRED = (MIN_AMPERAGE - 0.5) * VOLTAGE
-
-
-def steps(minutes):
-    return int(minutes * 60 / BIN_SECONDS)
 
 
 def floor_to_bin(ts, bin_seconds=BIN_SECONDS):
@@ -161,32 +156,14 @@ def build_feature_frame(client, pvs6_db, weather_db, now):
     df["baseline_house_load_w"] = df["site_load_p"] - df["charging_power_watts"].fillna(0.0)
     df["excess_now_w"] = df["pv_p"] - df["baseline_house_load_w"]
 
-    df["pv_p_range"] = df["pv_p_max"] - df["pv_p_min"]
-    df["site_load_p_range"] = df["site_load_p_max"] - df["site_load_p_min"]
-
-    df["pv_p_slope_2min"] = (df["pv_p"] - df["pv_p"].shift(steps(2))) / 2.0
-    df["pv_p_slope_10min"] = (df["pv_p"] - df["pv_p"].shift(steps(10))) / 10.0
-    df["pv_p_slope_30min"] = (df["pv_p"] - df["pv_p"].shift(steps(30))) / 30.0
-    df["solar_radiation_slope_10min"] = (
-        df["solar_radiation"] - df["solar_radiation"].shift(steps(10))
-    ) / 10.0
-    df["excess_now_slope_2min"] = (df["excess_now_w"] - df["excess_now_w"].shift(steps(2))) / 2.0
-    df["excess_now_slope_10min"] = (
-        df["excess_now_w"] - df["excess_now_w"].shift(steps(10))
-    ) / 10.0
-
     df["day_of_year"] = df.index.dayofyear
     # NOTE: intentionally minute-granularity (no seconds), even on this 30s grid — matches
-    # export_and_join.py exactly, which model_run4 was trained on. Two consecutive 30s bins in
-    # the same minute get an identical time_of_day; "fixing" this to be more precise would feed
-    # the model an input distribution it never saw in training.
+    # export_and_join.py exactly, which model_run4/5 were trained on. Two consecutive 30s bins
+    # in the same minute get an identical time_of_day; "fixing" this to be more precise would
+    # feed the model an input distribution it never saw in training.
     df["time_of_day"] = df.index.hour + df.index.minute / 60.0
-    df["time_of_day_sin"] = np.sin(2 * np.pi * df["time_of_day"] / 24.0)
-    df["time_of_day_cos"] = np.cos(2 * np.pi * df["time_of_day"] / 24.0)
-    df["day_of_year_sin"] = np.sin(2 * np.pi * df["day_of_year"] / 365.25)
-    df["day_of_year_cos"] = np.cos(2 * np.pi * df["day_of_year"] / 365.25)
 
-    return df
+    return add_derived_features(df)
 
 
 def compute_model_target_amps(model_excess_w, tou_threshold):
